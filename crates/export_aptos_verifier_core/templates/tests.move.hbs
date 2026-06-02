@@ -1,0 +1,58 @@
+#[test_only]
+module {{named_address}}::{{module_name}}_tests {
+    use {{named_address}}::{{module_name}};
+    use std::vector;
+
+    fun proof_a_bytes(): vector<u8> { {{{proof_a}}} }
+    fun proof_b_bytes(): vector<u8> { {{{proof_b}}} }
+    fun proof_c_bytes(): vector<u8> { {{{proof_c}}} }
+    fun public_inputs_bytes(): vector<vector<u8>> { {{{public_inputs_rendered}}} }
+
+    #[test]
+    fun test_valid_proof() {
+        let ok = {{module_name}}::verify(
+            public_inputs_bytes(),
+            proof_a_bytes(),
+            proof_b_bytes(),
+            proof_c_bytes(),
+        );
+        assert!(ok, 1);
+    }
+
+    #[test]
+    fun test_invalid_public_input_fails() {
+        let public_inputs = public_inputs_bytes();
+        if (vector::is_empty(&public_inputs)) {
+            let proof_a = proof_a_bytes();
+            if (!vector::is_empty(&proof_a)) {
+                let first = *vector::borrow(&proof_a, 0);
+                vector::pop_back(&mut proof_a);
+                vector::push_back(&mut proof_a, first + 1);
+            };
+            let ok = {{module_name}}::verify(
+                vector::empty<vector<u8>>(),
+                proof_a,
+                proof_b_bytes(),
+                proof_c_bytes(),
+            );
+            assert!(!ok, 1);
+        } else {
+            let last_input = vector::pop_back(&mut public_inputs);
+            if (vector::is_empty(&last_input)) {
+                vector::push_back(&mut last_input, 1);
+            } else {
+                let first = *vector::borrow(&last_input, 0);
+                vector::pop_back(&mut last_input);
+                vector::push_back(&mut last_input, first + 1);
+            };
+            vector::push_back(&mut public_inputs, last_input);
+            let ok = {{module_name}}::verify(
+                public_inputs,
+                proof_a_bytes(),
+                proof_b_bytes(),
+                proof_c_bytes(),
+            );
+            assert!(!ok, 1);
+        };
+    }
+}

@@ -1,0 +1,24 @@
+[package]
+name = "export-aptos-verifier-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/export-aptos-verifier-cli"
+description = "CLI for exporting Groth16 artifacts to Aptos Move verifier packages."
+readme = "README.md"
+keywords = ["aptos", "groth16", "verifier", "cli", "zk"]
+categories = ["command-line-utilities", "cryptography"]
+
+[[bin]]
+name = "export-aptos-verifier"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+export_aptos_verifier_core = { package = "export-aptos-verifier-core", version = "0.1.0", path = "../export_aptos_verifier_core" }
+regex = "1"
+
+[dev-dependencies]
+assert_cmd = "2"

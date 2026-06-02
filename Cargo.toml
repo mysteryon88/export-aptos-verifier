@@ -1,0 +1,18 @@
+[workspace]
+members = [
+    "crates/export_aptos_verifier_core",
+    "crates/export_aptos_verifier_cli",
+]
+exclude = [
+    "examples/ark-mimc",
+    "examples/MulCircuit",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/mysteryon88/export-aptos-verifier"
+homepage = "https://github.com/mysteryon88/export-aptos-verifier"
+documentation = "https://docs.rs/export-aptos-verifier-core"
