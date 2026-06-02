@@ -5,7 +5,7 @@
 ## Install
 
 ```bash
-cargo install export-aptos-verifier-cli
+cargo install export-aptos-verifier
 ```
 
 ## Supported inputs

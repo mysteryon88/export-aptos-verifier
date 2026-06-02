@@ -1,11 +1,11 @@
 [package]
-name = "export-aptos-verifier-cli"
+name = "export-aptos-verifier"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation = "https://docs.rs/export-aptos-verifier-cli"
+documentation = "https://docs.rs/export-aptos-verifier"
 description = "CLI for exporting Groth16 artifacts to Aptos Move verifier packages."
 readme = "README.md"
 keywords = ["aptos", "groth16", "verifier", "cli", "zk"]

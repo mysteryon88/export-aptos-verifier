@@ -5,7 +5,7 @@ CLI tool that generates Aptos Move Groth16 verifier packages from Groth16 artifa
 ## Install
 
 ```bash
-cargo install export-aptos-verifier-cli
+cargo install export-aptos-verifier
 ```
 
 ## Usage
