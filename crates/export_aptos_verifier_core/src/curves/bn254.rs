@@ -146,6 +146,11 @@ fn normalize_g1(point: &Groth16G1Point) -> Result<G1Affine> {
             "g1 point is not on curve".to_string(),
         ));
     }
+    if !affine.is_in_correct_subgroup_assuming_on_curve() {
+        return Err(Error::PointNotInSubgroup(
+            "g1 point is not in the correct subgroup".to_string(),
+        ));
+    }
     Ok(affine)
 }
 
@@ -173,6 +178,17 @@ fn normalize_g2(point: &Groth16G2Point) -> Result<G2Affine> {
     let z_inv2 = z_inv.square();
     let z_inv3 = z_inv2 * z_inv;
     let affine = G2Affine::new_unchecked(x * z_inv2, y * z_inv3);
+
+    if !affine.is_on_curve() {
+        return Err(Error::PointNotOnCurve(
+            "g2 point is not on curve".to_string(),
+        ));
+    }
+    if !affine.is_in_correct_subgroup_assuming_on_curve() {
+        return Err(Error::PointNotInSubgroup(
+            "g2 point is not in the correct subgroup".to_string(),
+        ));
+    }
 
     Ok(affine)
 }

@@ -6,7 +6,9 @@ use std::process::Command as ProcessCommand;
 
 use export_aptos_verifier_core::curves::{create_adapter, PointFormat};
 use export_aptos_verifier_core::error::{Error, Result};
-use export_aptos_verifier_core::formats::{load_compact_bundle, load_snarkjs_json_inputs};
+use export_aptos_verifier_core::formats::{
+    load_compact_bundle, load_snarkjs_json_inputs_with_curve_hint,
+};
 use export_aptos_verifier_core::local_verify;
 use export_aptos_verifier_core::movegen::{
     generate_move_package, GenerateMovePackageOptions, MovegenMode,
@@ -119,6 +121,7 @@ fn main() {
 fn run_generate(args: GenerateArgs) -> Result<()> {
     validate_names(&args.package_name, "package_name")?;
     validate_names(&args.module_name, "module_name")?;
+    validate_account_address(&args.account_address)?;
 
     let curve_hint = if matches!(args.curve, CurveArg::Auto) {
         None
@@ -137,7 +140,12 @@ fn run_generate(args: GenerateArgs) -> Result<()> {
             let proof = args.proof.as_ref().ok_or_else(|| {
                 Error::MissingInput("--proof is required unless --bundle is used".to_string())
             })?;
-            load_snarkjs_json_inputs(vk, proof, args.public.as_deref())?
+            load_snarkjs_json_inputs_with_curve_hint(
+                vk,
+                proof,
+                args.public.as_deref(),
+                curve_hint.as_deref(),
+            )?
         }
         (Some(_), InputFormatArg::SnarkjsJson) => {
             return Err(Error::MissingInput(
@@ -299,6 +307,16 @@ fn validate_names(value: &str, field: &str) -> Result<()> {
         return Err(Error::InvalidPackageName(format!(
             "{field} must match [A-Za-z_][A-Za-z0-9_]*"
         )));
+    }
+    Ok(())
+}
+
+fn validate_account_address(value: &str) -> Result<()> {
+    let re = Regex::new(r"^0[xX][0-9a-fA-F]{1,64}$").unwrap();
+    if !re.is_match(value) {
+        return Err(Error::InvalidAccountAddress(
+            "account_address must match 0x[0-9a-fA-F]{1,64}".to_string(),
+        ));
     }
     Ok(())
 }

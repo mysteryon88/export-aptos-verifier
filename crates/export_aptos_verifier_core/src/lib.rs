@@ -9,7 +9,9 @@ pub mod verifier;
 
 pub use crate::curves::{create_adapter, CurveAdapter, CurveId, PointFormat};
 pub use crate::error::{Error, Result};
-pub use crate::formats::{load_compact_bundle, load_snarkjs_json_inputs};
+pub use crate::formats::{
+    load_compact_bundle, load_snarkjs_json_inputs, load_snarkjs_json_inputs_with_curve_hint,
+};
 pub use crate::model::{
     CurveKind, DecimalValue, Groth16G1Point, Groth16G2Point, Groth16Proof, Groth16VerificationKey,
     Groth16VerifierInputs, SourceFormat,

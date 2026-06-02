@@ -403,6 +403,10 @@ fn parse_compact_scalar(raw: &str, field_name: &str) -> Result<String> {
         )));
     }
 
+    if value.chars().all(|c| c.is_ascii_digit()) {
+        parse_decimal(value, field_name)?;
+        return Ok(value.to_string());
+    }
     if value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()) {
         let bytes = hex::decode(value).map_err(|e| {
             Error::DecimalParse(format!(
@@ -410,11 +414,6 @@ fn parse_compact_scalar(raw: &str, field_name: &str) -> Result<String> {
             ))
         })?;
         return Ok(BigUint::from_bytes_le(&bytes).to_string());
-    }
-
-    if value.chars().all(|c| c.is_ascii_digit()) {
-        parse_decimal(value, field_name)?;
-        return Ok(value.to_string());
     }
     if value.chars().all(|c| c.is_ascii_hexdigit()) {
         let value = BigUint::parse_bytes(value.as_bytes(), 16)

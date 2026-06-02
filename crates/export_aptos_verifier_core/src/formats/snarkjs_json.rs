@@ -1,5 +1,5 @@
 use crate::error::{Error, Result};
-use crate::model::{Groth16VerifierInputs, SourceFormat};
+use crate::model::{CurveKind, Groth16VerifierInputs, SourceFormat};
 use crate::snarkjs::{parse_decimal, parse_proof, parse_public_inputs, parse_verification_key};
 use serde::Deserialize;
 use serde_json::Value;
@@ -17,14 +17,61 @@ pub fn load_snarkjs_json_inputs(
     proof_path: &Path,
     public_path: Option<&Path>,
 ) -> Result<Groth16VerifierInputs> {
-    let vk = parse_verification_key(vk_path)?;
-    let proof = parse_proof(proof_path)?;
+    load_snarkjs_json_inputs_with_curve_hint(vk_path, proof_path, public_path, None)
+}
+
+pub fn load_snarkjs_json_inputs_with_curve_hint(
+    vk_path: &Path,
+    proof_path: &Path,
+    public_path: Option<&Path>,
+    curve_hint: Option<&str>,
+) -> Result<Groth16VerifierInputs> {
+    let mut vk = parse_verification_key(vk_path)?;
+    let mut proof = parse_proof(proof_path)?;
+    apply_curve_hint(&mut vk.curve, &mut proof.curve, curve_hint)?;
+
     let public_inputs = match public_path {
         Some(path) => parse_public_inputs(path)?,
         None => load_public_signals_from_proof(proof_path)?,
     };
 
     Groth16VerifierInputs::from_legacy(vk, proof, public_inputs, SourceFormat::SnarkjsJson)
+}
+
+fn apply_curve_hint(
+    vk_curve: &mut Option<String>,
+    proof_curve: &mut Option<String>,
+    curve_hint: Option<&str>,
+) -> Result<()> {
+    let Some(raw_hint) = curve_hint else {
+        return Ok(());
+    };
+
+    let hinted_curve = CurveKind::from_name(raw_hint)?;
+    let canonical_hint = hinted_curve.canonical_name().to_string();
+
+    for (field, existing) in [
+        ("verification key", vk_curve.as_deref()),
+        ("proof", proof_curve.as_deref()),
+    ] {
+        if let Some(existing) = existing {
+            let existing_curve = CurveKind::from_name(existing)?;
+            if existing_curve != hinted_curve {
+                return Err(Error::CurveMismatch(format!(
+                    "requested curve {canonical_hint} does not match {field} curve {existing}"
+                )));
+            }
+        }
+    }
+
+    if vk_curve.is_none() {
+        *vk_curve = Some(canonical_hint.clone());
+    }
+    if proof_curve.is_none() {
+        *proof_curve = Some(canonical_hint);
+    }
+
+    Ok(())
 }
 
 fn load_public_signals_from_proof(path: &Path) -> Result<Vec<String>> {

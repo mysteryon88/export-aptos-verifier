@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 use export_aptos_verifier_core::curves::create_adapter;
 use export_aptos_verifier_core::formats::{load_compact_bundle, load_snarkjs_json_inputs};
@@ -27,6 +28,12 @@ fn temp_output_dir(name: &str) -> PathBuf {
 }
 
 fn aptos_move_test(package_dir: &PathBuf) {
+    static APTOS_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = APTOS_TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap();
+
     let output = Command::new("aptos")
         .args(["move", "test", "--package-dir"])
         .arg(package_dir)

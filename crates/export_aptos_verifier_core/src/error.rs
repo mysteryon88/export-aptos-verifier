@@ -51,12 +51,16 @@ pub enum Error {
     TemplateRender(String),
     #[error("ERR_OUTPUT_EXISTS: {0}")]
     OutputExists(PathBuf),
+    #[error("ERR_UNSAFE_OUTPUT_DIRECTORY: refusing to remove unsafe output directory {0}")]
+    UnsafeOutputDirectory(PathBuf),
     #[error("ERR_APTOS_TEST_FAILED: {0}")]
     AptosTestFailed(String),
     #[error("ERR_INVALID_MODULE_NAME: {0}")]
     InvalidModuleName(String),
     #[error("ERR_INVALID_PACKAGE_NAME: {0}")]
     InvalidPackageName(String),
+    #[error("ERR_INVALID_ACCOUNT_ADDRESS: {0}")]
+    InvalidAccountAddress(String),
     #[error("ERR_PREPARED_NOT_IMPLEMENTED: prepared mode is not implemented yet")]
     PreparedNotImplemented,
     #[error("ERR_TEMPLATE_MISSING: {0}")]

@@ -7,8 +7,9 @@ use crate::error::{Error, Result};
 use crate::model::Groth16VerifierInputs;
 pub use context::{MovegenMode, MovegenTemplateInput};
 use handlebars::Handlebars;
+use std::env;
 use std::fs::{self, create_dir_all, write};
-use std::path::Path;
+use std::path::{Component, Path};
 
 #[derive(Debug, Clone)]
 pub struct GenerateMovePackageOptions<'a> {
@@ -25,6 +26,11 @@ pub fn generate_move_package(
     inputs: &Groth16VerifierInputs,
     options: &GenerateMovePackageOptions<'_>,
 ) -> Result<()> {
+    validate_account_address(options.account_address)?;
+    if options.force {
+        validate_safe_force_output_dir(out_dir)?;
+    }
+
     if out_dir.exists() && !options.force {
         return Err(Error::OutputExists(out_dir.to_path_buf()));
     }
@@ -139,6 +145,58 @@ pub fn generate_move_package(
         source: e,
         context: "write README.md".to_string(),
     })?;
+
+    Ok(())
+}
+
+fn validate_account_address(value: &str) -> Result<()> {
+    let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    else {
+        return Err(Error::InvalidAccountAddress(
+            "account_address must start with 0x".to_string(),
+        ));
+    };
+    if hex.is_empty() || hex.len() > 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(Error::InvalidAccountAddress(
+            "account_address must match 0x[0-9a-fA-F]{1,64}".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_safe_force_output_dir(out_dir: &Path) -> Result<()> {
+    if out_dir
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(Error::UnsafeOutputDirectory(out_dir.to_path_buf()));
+    }
+
+    if !out_dir.exists() {
+        return Ok(());
+    }
+
+    let target = out_dir.canonicalize().map_err(|e| Error::Io {
+        source: e,
+        context: format!("canonicalize output dir {}", out_dir.display()),
+    })?;
+    if target.parent().is_none() {
+        return Err(Error::UnsafeOutputDirectory(target));
+    }
+
+    let cwd = env::current_dir().map_err(|e| Error::Io {
+        source: e,
+        context: "get current working directory".to_string(),
+    })?;
+    let cwd = cwd.canonicalize().map_err(|e| Error::Io {
+        source: e,
+        context: format!("canonicalize current working directory {}", cwd.display()),
+    })?;
+    if target == cwd || cwd.starts_with(&target) {
+        return Err(Error::UnsafeOutputDirectory(target));
+    }
 
     Ok(())
 }

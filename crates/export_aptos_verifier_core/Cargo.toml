@@ -10,7 +10,7 @@ description = "Load Groth16 artifacts from snarkjs JSON or Arkworks bundles and 
 readme = "README.md"
 keywords = ["aptos", "groth16", "verifier", "zk", "cryptography"]
 categories = ["cryptography"]
-exclude = ["/tests/fixtures/*.json", "/target"]
+exclude = ["/tests/**", "/target"]
 
 [dependencies]
 thiserror = "1"
