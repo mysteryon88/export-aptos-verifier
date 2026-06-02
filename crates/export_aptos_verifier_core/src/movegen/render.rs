@@ -27,24 +27,6 @@ Use the `generate` subcommand with:
 
 By default BN254 uses uncompressed points and `entry` mode.
 
-## BN254 format
-- G1: uncompressed
-- G2: uncompressed
-- Fr: little-endian 32 bytes
-
-## BLS12-381 format
-- G1: compressed
-- G2: compressed
-- Fr: little-endian 32 bytes
-
-## Security notes
-- strict field bound checking (`value < modulus`) is enforced before conversion
-- subgroup and curve membership checks are performed
-- point conversion normalizes from Jacobian/projective coordinates when needed
-
-## Examples
-See the repository examples for `MulCircuit` and `ark-mimc`.
-
 ## Known limitations
 - Prepared verification mode is not implemented in this version (`--prepared` returns ERR_PREPARED_NOT_IMPLEMENTED).
 - This tool does not verify cryptographic assumptions beyond local Arkworks checks.

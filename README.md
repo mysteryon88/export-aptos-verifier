@@ -1,6 +1,6 @@
 # Export Aptos Verifier
 
-`export-aptos-verifier` converts Groth16 artifacts into working Aptos Move verifier packages. It supports `BN254` and `BLS12-381`, accepts both classic `snarkjs` JSON files and compact Arkworks bundles, and performs strict validation plus local Arkworks verification before emitting Move code.
+`export-aptos-verifier` converts Groth16 artifacts into working Aptos Move verifier packages. It supports `BN254` and `BLS12-381`, accepts classic `snarkjs` JSON files, `gnark` artifacts converted via [gnark-to-snarkjs](https://github.com/mysteryon88/gnark-to-snarkjs), `noname` outputs via the same `snarkjs`-compatible flow, and compact Arkworks bundles, and performs strict validation plus local Arkworks verification before emitting Move code.
 
 ## Install
 
@@ -11,6 +11,8 @@ cargo install export-aptos-verifier
 ## Supported inputs
 
 - `snarkjs` JSON: `verification_key.json` + `proof.json` + optional `public.json`
+- `gnark`: convert artifacts with [gnark-to-snarkjs](https://github.com/mysteryon88/gnark-to-snarkjs), then use the generated `snarkjs` JSON files
+- `noname`: supported through its `snarkjs`-compatible output flow
 - compact bundle JSON: one file with `curve`, `vk`, `proof`, `public_input`
 - `proof.json` fallback: if `public.json` is omitted and the proof contains `publicSignals`, they are used automatically
 
@@ -65,8 +67,8 @@ export-aptos-verifier generate \
 
 ## Included examples
 
-- `examples/MulCircuit`: generates BLS12-381 `snarkjs`-style artifacts
-- `examples/ark-mimc`: generates BN254 and BLS12-381 artifacts, plus compact `groth16_artifacts.json` bundles
+- `examples/MulCircuit`: generates BLS12-381 `snarkjs` JSON artifacts (`verification_key.json`, `proof.json`, `public.json`) ready for `export-aptos-verifier generate`
+- `examples/ark-mimc`: generates BN254 and BLS12-381 `snarkjs` JSON artifacts plus compact `groth16_artifacts.json` bundles for `export-aptos-verifier generate`
 
 ## Safety checks
 

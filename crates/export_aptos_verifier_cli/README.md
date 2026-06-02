@@ -1,6 +1,6 @@
 # export-aptos-verifier
 
-CLI tool that generates Aptos Move Groth16 verifier packages from Groth16 artifacts.
+CLI tool that generates Aptos Move Groth16 verifier packages from Groth16 artifacts, including `snarkjs` JSON, `gnark` artifacts converted via [gnark-to-snarkjs](https://github.com/mysteryon88/gnark-to-snarkjs), `noname` `snarkjs`-compatible outputs, and compact Arkworks bundles.
 
 ## Install
 
@@ -38,6 +38,8 @@ export-aptos-verifier generate \
 ## Notes
 
 - Supports `snarkjs-json` and `arkworks-compact` input modes.
+- `gnark` is supported through `github.com/mysteryon88/gnark-to-snarkjs`.
+- `noname` is supported through its `snarkjs`-compatible artifact flow.
 - Supports `BN254` and `BLS12-381`.
 - `--prepared` intentionally returns `ERR_PREPARED_NOT_IMPLEMENTED` in this version.
 - For BN254 use `--bn254-format` if you need explicit format handling.

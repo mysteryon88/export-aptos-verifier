@@ -4,7 +4,7 @@ Library crate for loading Groth16 artifacts and generating Aptos Move verifier p
 
 ## Capabilities
 
-- loads `snarkjs` JSON inputs and compact Arkworks bundle JSON
+- loads `snarkjs` JSON inputs, `gnark` artifacts converted via [gnark-to-snarkjs](https://github.com/mysteryon88/gnark-to-snarkjs), `noname` `snarkjs`-compatible outputs, and compact Arkworks bundle JSON
 - supports `BN254` and `BLS12-381`
 - validates protocol, curve, subgroup membership, input counts, and field bounds
 - serializes values into the byte layouts expected by Aptos `crypto_algebra`
