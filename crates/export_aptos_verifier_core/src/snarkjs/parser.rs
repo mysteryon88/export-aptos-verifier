@@ -96,7 +96,7 @@ pub fn parse_public_inputs(path: &Path) -> Result<Vec<String>> {
 pub fn parse_compact_artifact(
     path: &Path,
     curve_hint: Option<&str>,
-) -> Result<(VerificationKey, Proof, Vec<String>)> {
+) -> Result<(VerificationKey, Option<Proof>, Vec<String>)> {
     let raw = read_json(path)?;
     let raw: PackedArtifact = serde_json::from_value(raw).map_err(|e| Error::JsonParse {
         source: e,
@@ -108,19 +108,29 @@ pub fn parse_compact_artifact(
 
     let curve = parse_curve(raw.curve.as_deref(), curve_hint)?;
     let protocol = raw.protocol;
-    let public_inputs = parse_public_input(raw.public_input, "public_input")?;
+    let public_inputs = match raw.public_input {
+        Some(public_input) => parse_public_input(Some(public_input), "public_input")?,
+        None => Vec::new(),
+    };
 
     let vk = parse_compact_vk(&curve, raw.vk)?;
-    let proof = parse_compact_proof(&curve, raw.proof)?;
+    let proof = raw
+        .proof
+        .map(|proof| parse_compact_proof(&curve, proof))
+        .transpose()?;
 
     let mut vk = vk;
     let mut proof = proof;
     let normalized_curve = curve.normalized_name().to_string();
     vk.curve = Some(normalized_curve.clone());
-    proof.curve = Some(normalized_curve);
+    if let Some(proof) = proof.as_mut() {
+        proof.curve = Some(normalized_curve);
+    }
     if let Some(protocol) = protocol {
         vk.protocol = Some(protocol.clone());
-        proof.protocol = Some(protocol);
+        if let Some(proof) = proof.as_mut() {
+            proof.protocol = Some(protocol);
+        }
     }
 
     Ok((vk, proof, public_inputs))
@@ -170,9 +180,7 @@ impl CurveChoice {
 
 fn parse_curve(value: Option<&str>, curve_hint: Option<&str>) -> Result<CurveChoice> {
     let raw_curve = value.or(curve_hint).ok_or_else(|| {
-        Error::MissingInput(
-            "compact artifact requires curve field, or pass --curve for parser mode".to_string(),
-        )
+        Error::MissingInput("compact artifact requires curve metadata".to_string())
     })?;
     match normalize_curve_name(raw_curve).as_str() {
         "bn128" | "bn254" | "altbn128" => Ok(CurveChoice::Bn254),
@@ -187,10 +195,7 @@ fn normalize_curve_name(value: &str) -> String {
     value.to_lowercase().replace(['-', '_'], "")
 }
 
-fn parse_compact_proof(curve: &CurveChoice, proof: Option<String>) -> Result<Proof> {
-    let proof = proof.ok_or_else(|| {
-        Error::MissingInput("compact artifact requires proof hex field".to_string())
-    })?;
+fn parse_compact_proof(curve: &CurveChoice, proof: String) -> Result<Proof> {
     match curve {
         CurveChoice::Bn254 => parse_bn254_proof(&proof),
         CurveChoice::Bls12381 => parse_bls_proof(&proof),

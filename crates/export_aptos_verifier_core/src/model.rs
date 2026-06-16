@@ -35,6 +35,7 @@ impl CurveKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceFormat {
     SnarkjsJson,
+    Arkworks,
     ArkworksCompact,
 }
 
@@ -77,7 +78,7 @@ pub struct Groth16VerifierInputs {
     pub curve: CurveKind,
     pub protocol: String,
     pub verifying_key: Groth16VerificationKey,
-    pub proof: Groth16Proof,
+    pub proof: Option<Groth16Proof>,
     pub public_inputs: Vec<DecimalValue>,
     pub source_format: SourceFormat,
 }
@@ -112,14 +113,103 @@ impl Groth16VerifierInputs {
                 vk_delta_2: vk.vk_delta_2.into(),
                 ic: vk.ic.into_iter().map(Into::into).collect(),
             },
-            proof: Groth16Proof {
+            proof: Some(Groth16Proof {
                 pi_a: proof.pi_a.into(),
                 pi_b: proof.pi_b.into(),
                 pi_c: proof.pi_c.into(),
-            },
+            }),
             public_inputs,
             source_format,
         })
+    }
+
+    pub fn from_legacy_vk_only(
+        vk: LegacyVerificationKey,
+        public_inputs: Vec<DecimalValue>,
+        source_format: SourceFormat,
+    ) -> Result<Self> {
+        validate_protocol(vk.protocol.as_ref(), None)?;
+        validate_verification_key_geometry(&vk)?;
+
+        if vk.ic.len() != vk.n_public + 1 {
+            return Err(Error::IcLengthMismatch(format!(
+                "expected IC length = nPublic + 1, got {}",
+                vk.ic.len()
+            )));
+        }
+        if !public_inputs.is_empty() && vk.n_public != public_inputs.len() {
+            return Err(Error::PublicInputCountMismatch(format!(
+                "expected nPublic={}, got {}",
+                vk.n_public,
+                public_inputs.len()
+            )));
+        }
+
+        let curve_name = validate_curve_match(vk.curve.as_ref(), None)?;
+        let curve = CurveKind::from_name(&curve_name)?;
+        let protocol = vk.protocol.clone().unwrap_or_else(|| "groth16".to_string());
+
+        Ok(Self {
+            curve,
+            protocol,
+            verifying_key: Groth16VerificationKey {
+                n_public: vk.n_public,
+                vk_alpha_1: vk.vk_alpha_1.into(),
+                vk_beta_2: vk.vk_beta_2.into(),
+                vk_gamma_2: vk.vk_gamma_2.into(),
+                vk_delta_2: vk.vk_delta_2.into(),
+                ic: vk.ic.into_iter().map(Into::into).collect(),
+            },
+            proof: None,
+            public_inputs,
+            source_format,
+        })
+    }
+
+    pub fn from_parts(
+        curve: CurveKind,
+        verifying_key: Groth16VerificationKey,
+        proof: Option<Groth16Proof>,
+        public_inputs: Vec<DecimalValue>,
+        source_format: SourceFormat,
+    ) -> Result<Self> {
+        if verifying_key.ic.len() != verifying_key.n_public + 1 {
+            return Err(Error::IcLengthMismatch(format!(
+                "expected {} IC points, got {}",
+                verifying_key.n_public + 1,
+                verifying_key.ic.len()
+            )));
+        }
+        if proof.is_some() && public_inputs.len() != verifying_key.n_public {
+            return Err(Error::PublicInputCountMismatch(format!(
+                "verification key expects {} public inputs, got {}",
+                verifying_key.n_public,
+                public_inputs.len()
+            )));
+        }
+        if proof.is_none()
+            && !public_inputs.is_empty()
+            && public_inputs.len() != verifying_key.n_public
+        {
+            return Err(Error::PublicInputCountMismatch(format!(
+                "verification key expects {} public inputs, got {}",
+                verifying_key.n_public,
+                public_inputs.len()
+            )));
+        }
+
+        Ok(Self {
+            curve,
+            protocol: "groth16".to_string(),
+            verifying_key,
+            proof,
+            public_inputs,
+            source_format,
+        })
+    }
+
+    pub fn has_test_vectors(&self) -> bool {
+        self.proof.is_some()
     }
 }
 

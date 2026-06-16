@@ -20,6 +20,52 @@ pub struct GenerateMovePackageOptions<'a> {
     pub force: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProofDataSnippet {
+    pub proof_a: String,
+    pub proof_b: String,
+    pub proof_c: String,
+    pub public_inputs_rendered: String,
+}
+
+impl ProofDataSnippet {
+    pub fn render_aptos_test_functions(&self) -> String {
+        format!(
+            r#"    fun proof_a_bytes(): vector<u8> {{ {} }}
+    fun proof_b_bytes(): vector<u8> {{ {} }}
+    fun proof_c_bytes(): vector<u8> {{ {} }}
+    fun public_inputs_bytes(): vector<vector<u8>> {{ {} }}"#,
+            self.proof_a, self.proof_b, self.proof_c, self.public_inputs_rendered
+        )
+    }
+}
+
+pub fn proof_data_snippet(
+    adapter: &dyn CurveAdapter,
+    inputs: &Groth16VerifierInputs,
+) -> Result<ProofDataSnippet> {
+    let proof = inputs.proof.as_ref().ok_or_else(|| {
+        Error::MissingInput("proof-data requires proof input; VK-only inputs have no proof".into())
+    })?;
+
+    let public_inputs_bytes: Vec<String> = inputs
+        .public_inputs
+        .iter()
+        .map(|value| {
+            adapter
+                .serialize_fr_public_input(value)
+                .map(|bytes| move_hex_literal(&bytes))
+        })
+        .collect::<Result<_>>()?;
+
+    Ok(ProofDataSnippet {
+        proof_a: move_hex_literal(&adapter.serialize_g1_proof(&proof.pi_a)?),
+        proof_b: move_hex_literal(&adapter.serialize_g2_proof(&proof.pi_b)?),
+        proof_c: move_hex_literal(&adapter.serialize_g1_proof(&proof.pi_c)?),
+        public_inputs_rendered: render::vector_of_hex(&public_inputs_bytes),
+    })
+}
+
 pub fn generate_move_package(
     out_dir: &Path,
     adapter: &dyn CurveAdapter,
@@ -51,16 +97,11 @@ pub fn generate_move_package(
         source: e,
         context: format!("create sources dir {}", out_dir.join("sources").display()),
     })?;
-    create_dir_all(out_dir.join("tests")).map_err(|e| Error::Io {
-        source: e,
-        context: format!("create tests dir {}", out_dir.join("tests").display()),
-    })?;
 
     let mut reg = Handlebars::new();
     register_templates(&mut reg)?;
 
     let vk = &inputs.verifying_key;
-    let proof = &inputs.proof;
     let public_inputs = &inputs.public_inputs;
 
     let vk_alpha_g1 = move_hex_literal(&adapter.serialize_g1_vk(&vk.vk_alpha_1)?);
@@ -76,9 +117,18 @@ pub fn generate_move_package(
         })
         .collect::<Result<_>>()?;
     let vk_gamma_abc_g1_rendered = render::vector_of_hex(&vk_gamma_abc_g1);
-    let proof_a = move_hex_literal(&adapter.serialize_g1_proof(&proof.pi_a)?);
-    let proof_b = move_hex_literal(&adapter.serialize_g2_proof(&proof.pi_b)?);
-    let proof_c = move_hex_literal(&adapter.serialize_g1_proof(&proof.pi_c)?);
+    let (proof_a, proof_b, proof_c) = match inputs.proof.as_ref() {
+        Some(proof) => (
+            move_hex_literal(&adapter.serialize_g1_proof(&proof.pi_a)?),
+            move_hex_literal(&adapter.serialize_g2_proof(&proof.pi_b)?),
+            move_hex_literal(&adapter.serialize_g1_proof(&proof.pi_c)?),
+        ),
+        None => (
+            "x\"\"".to_string(),
+            "x\"\"".to_string(),
+            "x\"\"".to_string(),
+        ),
+    };
     let public_inputs_bytes: Vec<String> = public_inputs
         .iter()
         .map(|value| {
@@ -129,17 +179,29 @@ pub fn generate_move_package(
         context: "write verifier.move".to_string(),
     })?;
 
-    let tests = reg
-        .render("move_tests", &input)
-        .map_err(|e| Error::TemplateRender(e.to_string()))?;
-    fs::write(out_dir.join("tests").join("verifier_tests.move"), tests).map_err(|e| Error::Io {
-        source: e,
-        context: "write verifier_tests.move".to_string(),
-    })?;
+    if inputs.has_test_vectors() {
+        create_dir_all(out_dir.join("tests")).map_err(|e| Error::Io {
+            source: e,
+            context: format!("create tests dir {}", out_dir.join("tests").display()),
+        })?;
+        let tests = reg
+            .render("move_tests", &input)
+            .map_err(|e| Error::TemplateRender(e.to_string()))?;
+        fs::write(out_dir.join("tests").join("verifier_tests.move"), tests).map_err(|e| {
+            Error::Io {
+                source: e,
+                context: "write verifier_tests.move".to_string(),
+            }
+        })?;
+    }
 
     write(
         out_dir.join("README.md"),
-        render::readme_content(options.package_name, &input.account_address),
+        render::readme_content(
+            options.package_name,
+            options.module_name,
+            &input.account_address,
+        ),
     )
     .map_err(|e| Error::Io {
         source: e,

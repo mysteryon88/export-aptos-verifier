@@ -1,10 +1,12 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use export_aptos_verifier_core::curves::create_adapter;
-use export_aptos_verifier_core::formats::{load_compact_bundle, load_snarkjs_json_inputs};
+use export_aptos_verifier_core::formats::{
+    load_compact_bundle, load_snarkjs_json_inputs, load_snarkjs_json_inputs_with_optional_proof,
+};
 use export_aptos_verifier_core::movegen::{
     generate_move_package, GenerateMovePackageOptions, MovegenMode,
 };
@@ -27,13 +29,16 @@ fn temp_output_dir(name: &str) -> PathBuf {
     dir
 }
 
-fn aptos_move_test(package_dir: &PathBuf) {
+fn aptos_cli_guard() -> MutexGuard<'static, ()> {
     static APTOS_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let _guard = APTOS_TEST_LOCK
+    APTOS_TEST_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .unwrap();
+        .unwrap()
+}
 
+fn aptos_move_test(package_dir: &PathBuf) {
+    let _guard = aptos_cli_guard();
     let output = Command::new("aptos")
         .args(["move", "test", "--package-dir"])
         .arg(package_dir)
@@ -42,6 +47,22 @@ fn aptos_move_test(package_dir: &PathBuf) {
     assert!(
         output.status.success(),
         "aptos move test failed for {}\nstdout:\n{}\nstderr:\n{}",
+        package_dir.display(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+fn aptos_move_compile(package_dir: &PathBuf) {
+    let _guard = aptos_cli_guard();
+    let output = Command::new("aptos")
+        .args(["move", "compile", "--package-dir"])
+        .arg(package_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "aptos move compile failed for {}\nstdout:\n{}\nstderr:\n{}",
         package_dir.display(),
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
@@ -111,7 +132,52 @@ fn ark_mimc_bn254_json_inputs_generate_a_package() {
     )
     .unwrap();
 
+    let generated_tests =
+        fs::read_to_string(out_dir.join("tests").join("verifier_tests.move")).unwrap();
+    assert!(generated_tests.contains("fun test_invalid_proof_fails()"));
+    assert!(!generated_tests.contains("vector::empty"));
+    let generated_verifier =
+        fs::read_to_string(out_dir.join("sources").join("verifier.move")).unwrap();
+    assert!(!generated_verifier.contains("vector::empty"));
+
     aptos_move_test(&out_dir);
+}
+
+#[test]
+fn ark_mimc_bn254_json_vk_only_generates_buildable_package_without_tests() {
+    let repo = repo_root();
+    let artifact_dir = repo
+        .join("examples")
+        .join("ark-mimc")
+        .join("artifacts")
+        .join("bn254");
+    let inputs = load_snarkjs_json_inputs_with_optional_proof(
+        &artifact_dir.join("verification_key.json"),
+        None,
+        None,
+        Some("bn254"),
+    )
+    .unwrap();
+    assert!(!inputs.has_test_vectors());
+
+    let out_dir = temp_output_dir("ark_mimc_bn254_json_vk_only");
+    generate_move_package(
+        &out_dir,
+        create_adapter("bn254").unwrap().as_ref(),
+        &inputs,
+        &GenerateMovePackageOptions {
+            package_name: "ark_mimc_bn254_json_vk_only",
+            module_name: "ark_mimc_bn254_json_vk_only",
+            account_address: "0xCAFE",
+            mode: MovegenMode::Entry,
+            force: true,
+        },
+    )
+    .unwrap();
+
+    assert!(!out_dir.join("tests").exists());
+    assert!(out_dir.join("sources").join("verifier.move").exists());
+    aptos_move_compile(&out_dir);
 }
 
 #[test]
@@ -148,6 +214,43 @@ fn ark_mimc_bls_json_inputs_generate_a_package() {
 }
 
 #[test]
+fn ark_mimc_bls_json_vk_only_generates_buildable_package_without_tests() {
+    let repo = repo_root();
+    let artifact_dir = repo
+        .join("examples")
+        .join("ark-mimc")
+        .join("artifacts")
+        .join("bls12_381");
+    let inputs = load_snarkjs_json_inputs_with_optional_proof(
+        &artifact_dir.join("verification_key.json"),
+        None,
+        None,
+        Some("bls12381"),
+    )
+    .unwrap();
+    assert!(!inputs.has_test_vectors());
+
+    let out_dir = temp_output_dir("ark_mimc_bls_json_vk_only");
+    generate_move_package(
+        &out_dir,
+        create_adapter("bls12_381").unwrap().as_ref(),
+        &inputs,
+        &GenerateMovePackageOptions {
+            package_name: "ark_mimc_bls_json_vk_only",
+            module_name: "ark_mimc_bls_json_vk_only",
+            account_address: "0xCAFE",
+            mode: MovegenMode::Entry,
+            force: true,
+        },
+    )
+    .unwrap();
+
+    assert!(!out_dir.join("tests").exists());
+    assert!(out_dir.join("sources").join("verifier.move").exists());
+    aptos_move_compile(&out_dir);
+}
+
+#[test]
 fn ark_mimc_bn254_bundle_inputs_generate_a_package() {
     let bundle = repo_root()
         .join("examples")
@@ -173,6 +276,52 @@ fn ark_mimc_bn254_bundle_inputs_generate_a_package() {
     .unwrap();
 
     aptos_move_test(&out_dir);
+}
+
+#[test]
+fn ark_mimc_bls_compact_vk_only_generates_buildable_package_without_tests() {
+    let bundle = repo_root()
+        .join("examples")
+        .join("ark-mimc")
+        .join("artifacts")
+        .join("bls12_381")
+        .join("groth16_artifacts.json");
+    let bundle_json = fs::read_to_string(&bundle).unwrap();
+    let bundle_value: serde_json::Value = serde_json::from_str(&bundle_json).unwrap();
+    let input_dir = temp_output_dir("ark_mimc_bls_compact_vk_only_input");
+    fs::create_dir_all(&input_dir).unwrap();
+    let vk_only_bundle = input_dir.join("groth16_vk_only.json");
+    fs::write(
+        &vk_only_bundle,
+        serde_json::json!({
+            "curve": "bls12381",
+            "vk": bundle_value.get("vk").unwrap(),
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let inputs = load_compact_bundle(&vk_only_bundle, None).unwrap();
+    assert!(!inputs.has_test_vectors());
+
+    let out_dir = temp_output_dir("ark_mimc_bls_compact_vk_only");
+    generate_move_package(
+        &out_dir,
+        create_adapter("bls12_381").unwrap().as_ref(),
+        &inputs,
+        &GenerateMovePackageOptions {
+            package_name: "ark_mimc_bls_compact_vk_only",
+            module_name: "ark_mimc_bls_compact_vk_only",
+            account_address: "0xCAFE",
+            mode: MovegenMode::Entry,
+            force: true,
+        },
+    )
+    .unwrap();
+
+    assert!(!out_dir.join("tests").exists());
+    assert!(out_dir.join("sources").join("verifier.move").exists());
+    aptos_move_compile(&out_dir);
 }
 
 #[test]

@@ -65,7 +65,7 @@ pub fn validate_curve_match(
             .map(str::to_string)
             .ok_or_else(|| Error::UnsupportedCurve(format!("unsupported proof curve: {p}"))),
         (None, None) => Err(Error::UnsupportedCurve(
-            "curve not specified in input files, use --curve".to_string(),
+            "curve not specified in input files; include curve metadata".to_string(),
         )),
     }
 }

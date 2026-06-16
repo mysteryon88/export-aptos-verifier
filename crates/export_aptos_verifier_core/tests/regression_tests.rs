@@ -102,11 +102,11 @@ fn dummy_inputs() -> Groth16VerifierInputs {
             vk_delta_2: dummy_g2(),
             ic: vec![dummy_g1()],
         },
-        proof: Groth16Proof {
+        proof: Some(Groth16Proof {
             pi_a: dummy_g1(),
             pi_b: dummy_g2(),
             pi_c: dummy_g1(),
-        },
+        }),
         public_inputs: vec![],
         source_format: SourceFormat::SnarkjsJson,
     }
@@ -217,4 +217,40 @@ fn generate_move_package_rejects_invalid_account_address_before_writing() {
 
     assert!(matches!(err, Error::InvalidAccountAddress(_)));
     assert!(!out.exists());
+}
+
+#[test]
+fn generated_readme_documents_root_generate_flags() {
+    let bundle = repo_root()
+        .join("examples")
+        .join("ark-mimc")
+        .join("artifacts")
+        .join("bn254")
+        .join("groth16_artifacts.json");
+    let inputs = load_compact_bundle(&bundle, None).unwrap();
+    let out = temp_path("generated_readme");
+    if out.exists() {
+        fs::remove_dir_all(&out).unwrap();
+    }
+
+    generate_move_package(
+        &out,
+        create_adapter("bn254").unwrap().as_ref(),
+        &inputs,
+        &GenerateMovePackageOptions {
+            package_name: "generated_readme",
+            module_name: "verifier",
+            account_address: "0xCAFE",
+            mode: MovegenMode::Entry,
+            force: true,
+        },
+    )
+    .unwrap();
+
+    let readme = fs::read_to_string(out.join("README.md")).unwrap();
+    assert!(readme.contains("export-aptos-verifier --vk"));
+    assert!(readme.contains("export-aptos-verifier --bundle"));
+    assert!(!readme.contains("generate subcommand"));
+
+    fs::remove_dir_all(out).unwrap();
 }

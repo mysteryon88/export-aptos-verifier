@@ -48,7 +48,10 @@ impl CurveAdapter for Bls12381Adapter {
 
     fn local_verify(&self, inputs: &Groth16VerifierInputs) -> Result<bool> {
         let vk = convert_vkey(&inputs.verifying_key)?;
-        let proof = convert_proof(&inputs.proof)?;
+        let proof = inputs.proof.as_ref().ok_or_else(|| {
+            Error::MissingInput("local verification requires proof input".to_string())
+        })?;
+        let proof = convert_proof(proof)?;
         let public_inputs = parse_public_inputs(&inputs.public_inputs)?;
 
         let prepared_vk = prepare_verifying_key(&vk);

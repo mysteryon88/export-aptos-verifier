@@ -1,75 +1,79 @@
 # Export Aptos Verifier
 
-`export-aptos-verifier` converts Groth16 artifacts into working Aptos Move verifier packages. It supports `BN254` and `BLS12-381`, accepts classic `snarkjs` JSON files, `gnark` artifacts converted via [gnark-to-snarkjs](https://github.com/mysteryon88/gnark-to-snarkjs), `noname` outputs via the same `snarkjs`-compatible flow, and compact Arkworks bundles, and performs strict validation plus local Arkworks verification before emitting Move code.
+**Export Aptos Verifier** is a CLI tool and Rust library for generating **Groth16** Aptos Move verifier packages from `verification_key.json`, Arkworks JSON/hex inputs, or compact Arkworks bundle files.
 
-## Install
+It supports **BN254** and **BLS12-381**. Circuits built with **Circom**, **Noname**, and **Gnark** are supported through `snarkjs`-compatible JSON; **Arkworks** is supported through direct JSON/hex inputs or compact bundles. The curve is inferred from artifact metadata.
+
+When proof data is supplied, the tool validates the artifacts, runs local Arkworks Groth16 verification, and emits Move tests with the generated package. VK-only generation is also supported.
+
+Generated packages use Aptos `crypto_algebra` byte layouts and contain `Move.toml`, `sources/verifier.move`, and optional `tests/verifier_tests.move`. Generation uses root-level CLI flags; `proof-data` is the only subcommand.
+
+## Installation
 
 ```bash
 cargo install export-aptos-verifier
+
+# Help
+export-aptos-verifier --help
 ```
 
-## Supported inputs
-
-- `snarkjs` JSON: `verification_key.json` + `proof.json` + optional `public.json`
-- `gnark`: convert artifacts with [gnark-to-snarkjs](https://github.com/mysteryon88/gnark-to-snarkjs), then use the generated `snarkjs` JSON files
-- `noname`: supported through its `snarkjs`-compatible output flow
-- compact bundle JSON: one file with `curve`, `vk`, `proof`, `public_input`
-- `proof.json` fallback: if `public.json` is omitted and the proof contains `publicSignals`, they are used automatically
-
-## What it generates
-
-- Aptos Move package with `Move.toml`
-- verifier module in `sources/verifier.move`
-- Move tests in `tests/verifier_tests.move`
-
-## Main CLI flags
-
-- `--input-format auto|snarkjs-json|arkworks-compact`
-- `--curve auto|bn254|bls12381`
-- `--mode library|entry|test`
-- `--run-aptos-test` to run `aptos move test` after generation
-- `--skip-local-verify` to skip Arkworks proof verification before generation
-- `--force` to overwrite output directory
-
-## CLI examples
-
-Classic JSON mode:
+## Import as a library
 
 ```bash
-export-aptos-verifier generate \
-  --vk ./verification_key.json \
-  --proof ./proof.json \
-  --out ./generated \
-  --package-name groth16_verifier \
-  --module-name multiplier_verifier \
-  --account-address 0xCAFE \
-  --curve auto
+cargo add export-aptos-verifier-core
 ```
 
-Compact bundle mode:
-
-```bash
-export-aptos-verifier generate \
-  --bundle ./groth16_artifacts.json \
-  --out ./generated \
-  --package-name groth16_verifier \
-  --module-name multiplier_verifier \
-  --account-address 0xCAFE \
-  --curve auto
+```rust
+use export_aptos_verifier_core::{
+    curves::create_adapter,
+    formats::{load_arkworks_inputs, load_compact_bundle, load_snarkjs_json_inputs_with_optional_proof},
+    movegen::{generate_move_package, GenerateMovePackageOptions, MovegenMode},
+};
 ```
 
-## Validation and limits
+Most users only need the CLI. Use the core crate when embedding verifier generation into another Rust tool.
 
-- validates protocol, curve, subgroup membership, field bounds, and public input counts
-- runs local Arkworks Groth16 verification by default before writing Move code
-- supports `Groth16` only in this version
-- `--prepared` is intentionally not implemented yet
+## Usage CLI
 
-## Included examples
+```sh
+# From snarkjs-compatible verification_key.json:
+export-aptos-verifier --vk ./verification_key.json --out ./generated/my_verifier --force
 
-- `examples/MulCircuit`: generates BLS12-381 `snarkjs` JSON artifacts (`verification_key.json`, `proof.json`, `public.json`) ready for `export-aptos-verifier generate`
-- `examples/ark-mimc`: generates BN254 and BLS12-381 `snarkjs` JSON artifacts plus compact `groth16_artifacts.json` bundles for `export-aptos-verifier generate`
+# Include proof vectors for local verification and generated Move tests:
+export-aptos-verifier --vk ./verification_key.json --proof ./proof.json --public ./public.json --out ./generated/my_verifier --force
 
-## Safety checks
+# If proof.json contains publicSignals, --public can be omitted:
+export-aptos-verifier --vk ./verification_key.json --proof ./proof.json --out ./generated/my_verifier --force
 
-Generated verifier packages are suitable as a starting point, but the emitted Move code should still be reviewed before production deployment.
+# From Arkworks JSON/hex inputs:
+export-aptos-verifier --vk ./arkworks_verification_key.json --proof ./arkworks_proof.json --public ./public_inputs.json --out ./generated/arkworks_verifier --force
+
+# From a compact Arkworks bundle:
+export-aptos-verifier --bundle ./groth16_artifacts.json --out ./generated/ark_mimc_bn254 --force
+
+# Customize the generated Move package:
+export-aptos-verifier --vk ./verification_key.json --out ./generated/my_verifier --package-name my_verifier --module-name verifier --account-address 0x0 --mode entry --force
+
+# Generate proof helper functions for tests:
+export-aptos-verifier proof-data --vk ./verification_key.json --proof ./proof.json
+
+# Generate and run aptos move test:
+export-aptos-verifier --vk ./verification_key.json --proof ./proof.json --out ./generated/my_verifier --run-aptos-test --force
+```
+
+`--package-name` is derived from `--out` by default, `--module-name` defaults to `verifier`, `--account-address` defaults to `0x0`, and `--mode` defaults to `entry`. `--mode` accepts `library`, `entry`, or `test`. Use `--skip-local-verify` only when you want to bypass local Arkworks proof verification. `--prepared` is intentionally not implemented yet.
+
+## References
+
+- [Aptos Move documentation](https://aptos.dev/network/blockchain/move)
+- [Aptos `crypto_algebra` Move module](https://aptos.dev/move-reference/mainnet/aptos-stdlib/crypto_algebra)
+- Examples
+  - [examples](./examples/)
+- Export of proof and verification key in JSON format compatible with snarkjs
+  - [gnark-to-snarkjs](https://github.com/mysteryon88/gnark-to-snarkjs)
+  - [ark-snarkjs](https://github.com/mysteryon88/ark-snarkjs)
+- Frameworks verified for compatibility
+  - [Circom](https://docs.circom.io/)
+  - [Noname](https://github.com/zksecurity/noname)
+  - [Gnark](https://github.com/Consensys/gnark)
+  - [Arkworks](https://github.com/arkworks-rs)

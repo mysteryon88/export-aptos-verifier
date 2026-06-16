@@ -1,50 +1,59 @@
 # export-aptos-verifier
 
-CLI tool that generates Aptos Move Groth16 verifier packages from Groth16 artifacts, including `snarkjs` JSON, `gnark` artifacts converted via [gnark-to-snarkjs](https://github.com/mysteryon88/gnark-to-snarkjs), `noname` `snarkjs`-compatible outputs, and compact Arkworks bundles.
+CLI for generating Aptos Move Groth16 verifier packages.
 
-## Install
+Generation uses root-level flags:
 
-```bash
-cargo install export-aptos-verifier
-```
-
-## Usage
-
-```bash
-export-aptos-verifier generate \
+```sh
+export-aptos-verifier \
   --vk ./verification_key.json \
   --proof ./proof.json \
-  --out ./generated \
-  --package-name groth16_verifier \
-  --module-name multiplier_verifier \
-  --account-address 0xCAFE \
-  --curve auto
+  --public ./public.json \
+  --out ./generated/my_verifier \
+  --force
 ```
 
-`--public` is optional when `proof.json` already contains `publicSignals`.
+Compact Arkworks bundle mode:
 
-Bundle mode:
-
-```bash
-export-aptos-verifier generate \
+```sh
+export-aptos-verifier \
   --bundle ./groth16_artifacts.json \
-  --out ./generated \
-  --package-name groth16_verifier \
-  --module-name multiplier_verifier \
-  --account-address 0xCAFE \
-  --curve auto
+  --out ./generated/arkworks_verifier \
+  --force
 ```
 
-## Notes
+Common options:
 
-- Supports `snarkjs-json` and `arkworks-compact` input modes.
-- `gnark` is supported through `github.com/mysteryon88/gnark-to-snarkjs`.
-- `noname` is supported through its `snarkjs`-compatible artifact flow.
-- Supports `BN254` and `BLS12-381`.
-- `--prepared` intentionally returns `ERR_PREPARED_NOT_IMPLEMENTED` in this version.
-- For BN254 use `--bn254-format` if you need explicit format handling.
-- For BLS12-381 use `--bls-format` if needed.
+- `--package-name <name>`: defaults to the sanitized `--out` directory name
+- `--module-name <name>`: defaults to `verifier`
+- `--account-address <address>`: defaults to `0x0`
+- `--mode library|entry|test`: defaults to `entry`
+- `--run-aptos-test`: runs `aptos move test --package-dir <out>`
+- `--skip-local-verify`: skips local Arkworks proof verification
+- `--prepared`: intentionally returns `ERR_PREPARED_NOT_IMPLEMENTED`
+- `--force`: overwrites the output directory
 
-## License
+`--proof` is optional. Supplying proof data enables local verification and generated Move tests. `--public` is optional when `proof.json` already contains `publicSignals`.
+
+`proof-data` is the only subcommand:
+
+```sh
+export-aptos-verifier proof-data \
+  --vk ./verification_key.json \
+  --proof ./proof.json
+```
+
+It prints Move helper functions for `proof_a_bytes()`, `proof_b_bytes()`, `proof_c_bytes()`, and `public_inputs_bytes()` using the same serialization as generated tests.
+
+Supported inputs:
+
+- snarkjs-compatible JSON
+- Arkworks VK/proof JSON or raw hex inputs
+- compact Arkworks bundles
+
+Supported curves:
+
+- BN254
+- BLS12-381
 
 MIT.

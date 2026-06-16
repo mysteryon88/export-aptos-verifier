@@ -1,19 +1,18 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use regex::Regex;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
-use export_aptos_verifier_core::curves::{create_adapter, PointFormat};
+use export_aptos_verifier_core::curves::create_adapter;
 use export_aptos_verifier_core::error::{Error, Result};
 use export_aptos_verifier_core::formats::{
-    load_compact_bundle, load_snarkjs_json_inputs_with_curve_hint,
+    load_arkworks_inputs, load_compact_bundle, load_snarkjs_json_inputs_with_optional_proof,
 };
 use export_aptos_verifier_core::local_verify;
 use export_aptos_verifier_core::movegen::{
-    generate_move_package, GenerateMovePackageOptions, MovegenMode,
+    generate_move_package, proof_data_snippet, GenerateMovePackageOptions, MovegenMode,
 };
-use export_aptos_verifier_core::CurveKind;
 
 #[derive(Parser)]
 #[command(
@@ -22,13 +21,15 @@ use export_aptos_verifier_core::CurveKind;
     about = "Export Groth16 artifacts to an Aptos Move verifier package"
 )]
 struct Cli {
+    #[command(flatten)]
+    generate: GenerateArgs,
     #[command(subcommand)]
-    command: CliCommand,
+    command: Option<CliCommand>,
 }
 
 #[derive(Subcommand)]
 enum CliCommand {
-    Generate(GenerateArgs),
+    ProofData(ProofDataArgs),
 }
 
 #[derive(clap::Args)]
@@ -40,22 +41,14 @@ struct GenerateArgs {
     #[arg(long)]
     public: Option<PathBuf>,
     #[arg(long)]
-    out: PathBuf,
+    out: Option<PathBuf>,
     #[arg(long)]
-    package_name: String,
+    package_name: Option<String>,
     #[arg(long)]
-    module_name: String,
-    #[arg(long)]
+    module_name: Option<String>,
+    #[arg(long, default_value = "0x0")]
     account_address: String,
 
-    #[arg(long, default_value_t = CurveArg::Auto)]
-    curve: CurveArg,
-    #[arg(long, default_value_t = InputFormatArg::Auto)]
-    input_format: InputFormatArg,
-    #[arg(long, default_value_t = PointFormatArg::Uncompressed)]
-    bn254_format: PointFormatArg,
-    #[arg(long, default_value_t = PointFormatArg::Compressed)]
-    bls_format: PointFormatArg,
     #[arg(long, default_value_t = ModeArg::Entry)]
     mode: ModeArg,
     #[arg(long, default_value_t = false)]
@@ -70,24 +63,19 @@ struct GenerateArgs {
     bundle: Option<PathBuf>,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
-enum CurveArg {
-    Auto,
-    Bn254,
-    Bls12381,
-}
+#[derive(clap::Args)]
+struct ProofDataArgs {
+    #[arg(long)]
+    vk: Option<PathBuf>,
+    #[arg(long)]
+    proof: Option<PathBuf>,
+    #[arg(long)]
+    public: Option<PathBuf>,
+    #[arg(long)]
+    bundle: Option<PathBuf>,
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
-enum InputFormatArg {
-    Auto,
-    SnarkjsJson,
-    ArkworksCompact,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
-enum PointFormatArg {
-    Compressed,
-    Uncompressed,
+    #[arg(long, default_value_t = false)]
+    skip_local_verify: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -110,7 +98,8 @@ impl ModeArg {
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
-        CliCommand::Generate(args) => run_generate(args),
+        Some(CliCommand::ProofData(args)) => run_proof_data(args),
+        None => run_generate(cli.generate),
     };
     if let Err(error) = result {
         eprintln!("{error}");
@@ -118,75 +107,75 @@ fn main() {
     }
 }
 
+fn run_proof_data(args: ProofDataArgs) -> Result<()> {
+    let inputs = load_inputs(
+        args.bundle.as_ref(),
+        args.vk.as_ref(),
+        args.proof.as_ref(),
+        args.public.as_ref(),
+    )?;
+    let requested_curve = inputs.curve.canonical_name().to_string();
+    let adapter = create_adapter(&requested_curve)?;
+
+    if !args.skip_local_verify && inputs.has_test_vectors() {
+        let ok = local_verify(adapter.as_ref(), &inputs)?;
+        if !ok {
+            return Err(Error::LocalProofVerificationFailed(
+                "local arkworks verification returned false".to_string(),
+            ));
+        }
+    }
+
+    let snippet = proof_data_snippet(adapter.as_ref(), &inputs)?;
+    println!("{}", snippet.render_aptos_test_functions());
+    Ok(())
+}
+
 fn run_generate(args: GenerateArgs) -> Result<()> {
-    validate_names(&args.package_name, "package_name")?;
-    validate_names(&args.module_name, "module_name")?;
-    validate_account_address(&args.account_address)?;
+    let GenerateArgs {
+        vk,
+        proof,
+        public,
+        out,
+        package_name,
+        module_name,
+        account_address,
+        mode,
+        run_aptos_test: should_run_aptos_test,
+        force,
+        skip_local_verify,
+        prepared,
+        bundle,
+    } = args;
 
-    let curve_hint = if matches!(args.curve, CurveArg::Auto) {
-        None
-    } else {
-        Some(args.curve.to_string())
+    let out =
+        out.ok_or_else(|| Error::MissingInput("--out is required for generation".to_string()))?;
+    let package_name = match package_name {
+        Some(package_name) => package_name,
+        None => default_package_name(&out)?,
     };
+    let module_name = module_name.unwrap_or_else(|| "verifier".to_string());
 
-    let inputs = match (args.bundle.as_ref(), args.input_format) {
-        (Some(bundle), InputFormatArg::Auto | InputFormatArg::ArkworksCompact) => {
-            load_compact_bundle(bundle, curve_hint.as_deref())?
-        }
-        (None, InputFormatArg::Auto | InputFormatArg::SnarkjsJson) => {
-            let vk = args.vk.as_ref().ok_or_else(|| {
-                Error::MissingInput("--vk is required unless --bundle is used".to_string())
-            })?;
-            let proof = args.proof.as_ref().ok_or_else(|| {
-                Error::MissingInput("--proof is required unless --bundle is used".to_string())
-            })?;
-            load_snarkjs_json_inputs_with_curve_hint(
-                vk,
-                proof,
-                args.public.as_deref(),
-                curve_hint.as_deref(),
-            )?
-        }
-        (Some(_), InputFormatArg::SnarkjsJson) => {
-            return Err(Error::MissingInput(
-                "snarkjs-json mode requires --vk and --proof inputs".to_string(),
-            ));
-        }
-        (None, InputFormatArg::ArkworksCompact) => {
-            return Err(Error::MissingInput(
-                "arkworks-compact mode requires --bundle".to_string(),
-            ));
-        }
-    };
+    validate_names(&package_name, "package_name")?;
+    validate_names(&module_name, "module_name")?;
+    validate_account_address(&account_address)?;
 
-    let requested_curve = match args.curve {
-        CurveArg::Auto => inputs.curve.canonical_name().to_string(),
-        CurveArg::Bn254 => {
-            if inputs.curve != CurveKind::Bn254 {
-                return Err(Error::CurveMismatch(
-                    "requested curve bn254 does not match input curve metadata".to_string(),
-                ));
-            }
-            "bn254".to_string()
-        }
-        CurveArg::Bls12381 => {
-            if inputs.curve != CurveKind::Bls12_381 {
-                return Err(Error::CurveMismatch(
-                    "requested curve bls12381 does not match input curve metadata".to_string(),
-                ));
-            }
-            "bls12381".to_string()
-        }
-    };
+    let inputs = load_inputs(
+        bundle.as_ref(),
+        vk.as_ref(),
+        proof.as_ref(),
+        public.as_ref(),
+    )?;
 
-    if args.prepared {
+    let requested_curve = inputs.curve.canonical_name().to_string();
+
+    if prepared {
         return Err(Error::PreparedNotImplemented);
     }
 
     let adapter = create_adapter(&requested_curve)?;
-    validate_point_format(adapter.as_ref(), &requested_curve, &args)?;
 
-    if !args.skip_local_verify {
+    if !skip_local_verify && inputs.has_test_vectors() {
         let ok = local_verify(adapter.as_ref(), &inputs)?;
         if !ok {
             return Err(Error::LocalProofVerificationFailed(
@@ -196,81 +185,60 @@ fn run_generate(args: GenerateArgs) -> Result<()> {
     }
 
     generate_move_package(
-        &args.out,
+        &out,
         adapter.as_ref(),
         &inputs,
         &GenerateMovePackageOptions {
-            package_name: &args.package_name,
-            module_name: &args.module_name,
-            account_address: &args.account_address,
-            mode: args.mode.into_move_mode(),
-            force: args.force,
+            package_name: &package_name,
+            module_name: &module_name,
+            account_address: &account_address,
+            mode: mode.into_move_mode(),
+            force,
         },
     )?;
 
-    if args.run_aptos_test {
-        run_aptos_test(&args.out)?;
+    if should_run_aptos_test {
+        run_aptos_test(&out)?;
     }
 
     Ok(())
 }
 
-fn validate_point_format(
-    adapter: &dyn export_aptos_verifier_core::curves::CurveAdapter,
-    requested_curve: &str,
-    args: &GenerateArgs,
-) -> Result<()> {
-    let normalized = canonicalize_curve(requested_curve);
-    if normalized == "bn254" {
-        let expected = adapter.default_point_format();
-        if expected != map_point_format(&args.bn254_format) {
-            return Err(Error::UnsupportedCurve(format!(
-                "unsupported BN254 format, expected {:?}",
-                expected
-            )));
-        }
-    }
-    if normalized == "bls12381" {
-        let expected = adapter.default_point_format();
-        if expected != map_point_format(&args.bls_format) {
-            return Err(Error::UnsupportedCurve(format!(
-                "unsupported BLS12-381 format, expected {:?}",
-                expected
-            )));
-        }
-    }
-    Ok(())
-}
-
-impl fmt::Display for CurveArg {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Self::Auto => "auto",
-            Self::Bn254 => "bn254",
-            Self::Bls12381 => "bls12381",
-        };
-        write!(f, "{s}")
+fn load_inputs(
+    bundle: Option<&PathBuf>,
+    vk: Option<&PathBuf>,
+    proof: Option<&PathBuf>,
+    public: Option<&PathBuf>,
+) -> Result<export_aptos_verifier_core::model::Groth16VerifierInputs> {
+    match (bundle, vk) {
+        (Some(bundle), None) => load_compact_bundle(bundle, None),
+        (None, Some(vk)) => load_auto_vk_inputs(
+            vk,
+            proof.map(PathBuf::as_path),
+            public.map(PathBuf::as_path),
+        ),
+        (Some(_), Some(_)) => Err(Error::MissingInput(
+            "use either --bundle or --vk, not both".to_string(),
+        )),
+        (None, None) => Err(Error::MissingInput(
+            "--vk is required unless --bundle is used".to_string(),
+        )),
     }
 }
 
-impl fmt::Display for InputFormatArg {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Self::Auto => "auto",
-            Self::SnarkjsJson => "snarkjs-json",
-            Self::ArkworksCompact => "arkworks-compact",
-        };
-        write!(f, "{s}")
-    }
-}
-
-impl fmt::Display for PointFormatArg {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Self::Compressed => "compressed",
-            Self::Uncompressed => "uncompressed",
-        };
-        write!(f, "{s}")
+fn load_auto_vk_inputs(
+    vk: &Path,
+    proof: Option<&Path>,
+    public: Option<&Path>,
+) -> Result<export_aptos_verifier_core::model::Groth16VerifierInputs> {
+    match load_snarkjs_json_inputs_with_optional_proof(vk, proof, public, None) {
+        Ok(inputs) => Ok(inputs),
+        Err(snarkjs_err) => match load_arkworks_inputs(vk, proof, public, None) {
+            Ok(inputs) => Ok(inputs),
+            Err(arkworks_err) => Err(Error::MissingInput(format!(
+                "could not auto-detect artifact type: snarkjs failed with {snarkjs_err}; arkworks failed with {arkworks_err}"
+            ))),
+        },
     }
 }
 
@@ -285,15 +253,30 @@ impl fmt::Display for ModeArg {
     }
 }
 
-fn canonicalize_curve(name: &str) -> String {
-    name.to_lowercase().replace(['-', '_'], "")
-}
-
-fn map_point_format(value: &PointFormatArg) -> PointFormat {
-    match value {
-        PointFormatArg::Compressed => PointFormat::Compressed,
-        PointFormatArg::Uncompressed => PointFormat::Uncompressed,
+fn default_package_name(out: &Path) -> Result<String> {
+    let raw = out
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            Error::InvalidPackageName("--out must end with a package directory".to_string())
+        })?;
+    let mut name = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            name.push(ch);
+        } else {
+            name.push('_');
+        }
     }
+    if name.is_empty() {
+        return Err(Error::InvalidPackageName(
+            "--out must end with a non-empty package directory".to_string(),
+        ));
+    }
+    if name.as_bytes()[0].is_ascii_digit() {
+        name.insert(0, '_');
+    }
+    Ok(name)
 }
 
 fn validate_names(value: &str, field: &str) -> Result<()> {
