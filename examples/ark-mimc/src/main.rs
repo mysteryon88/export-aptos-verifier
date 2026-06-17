@@ -18,23 +18,23 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::time::{Duration, Instant};
 
-use ark_bn254::Bn254;
 use ark_bls12_381::Bls12_381;
+use ark_bn254::Bn254;
 use ark_crypto_primitives::snark::{CircuitSpecificSetupSNARK, SNARK};
 use ark_ec::pairing::Pairing;
-use ark_ff::{Field, PrimeField};
 use ark_ff::UniformRand;
+use ark_ff::{Field, PrimeField};
 use ark_r1cs_std::alloc::AllocVar;
 use ark_r1cs_std::eq::EqGadget;
-use ark_r1cs_std::fields::fp::FpVar;
 use ark_r1cs_std::fields::FieldVar;
-use ark_relations::gr1cs::{ConstraintSystemRef, ConstraintSynthesizer, SynthesisError};
+use ark_r1cs_std::fields::fp::FpVar;
+use ark_relations::gr1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
 #[cfg(test)]
 use ark_relations::gr1cs::{ConstraintSystem, SynthesisMode};
 use ark_serialize::CanonicalSerialize;
+use ark_snarkjs::{AsFp2, CurveTag, export_proof, export_vk};
 use ark_std::rand::{RngCore, SeedableRng};
 use ark_std::test_rng;
-use ark_snarkjs::{export_proof, export_vk, AsFp2, CurveTag};
 
 const MIMC_ROUNDS: usize = 322;
 
@@ -54,9 +54,9 @@ const MIMC_ROUNDS: usize = 322;
 fn mimc<F: Field>(mut xl: F, mut xr: F, constants: &[F]) -> F {
     assert_eq!(constants.len(), MIMC_ROUNDS);
 
-    for i in 0..MIMC_ROUNDS {
+    for constant in constants.iter().take(MIMC_ROUNDS) {
         let mut tmp1 = xl;
-        tmp1.add_assign(&constants[i]);
+        tmp1.add_assign(constant);
         let mut tmp2 = tmp1;
         tmp2.square_in_place();
         tmp2.mul_assign(&tmp1);
@@ -94,9 +94,9 @@ impl<'a, F: PrimeField> ConstraintSynthesizer<F> for MiMCDemo<'a, F> {
             self.output.ok_or(SynthesisError::AssignmentMissing)
         })?;
 
-        for i in 0..MIMC_ROUNDS {
-            let tmp = (&xl + self.constants[i]).square()?;
-            let new_xl = tmp * (&xl + self.constants[i]) + xr;
+        for constant in self.constants.iter().take(MIMC_ROUNDS) {
+            let tmp = (&xl + *constant).square()?;
+            let new_xl = tmp * (&xl + *constant) + xr;
             xr = xl;
             xl = new_xl;
         }
@@ -146,10 +146,8 @@ fn resolve_output_dir(out_dir: &str, curve: &str) -> PathBuf {
     }
 }
 
-fn write_artifacts_for_curve<E>(
-    name: &str,
-    out_dir: &Path,
-) where
+fn write_artifacts_for_curve<E>(name: &str, out_dir: &Path)
+where
     E: Pairing + CurveTag,
     <E::G2Affine as ark_ec::AffineRepr>::BaseField: AsFp2,
 {
@@ -181,7 +179,7 @@ fn write_artifacts_for_curve<E>(
     let proof = Groth16::<E>::prove(&pk, c, &mut rng).unwrap();
     let pvk = Groth16::<E>::process_vk(&vk).unwrap();
     assert!(Groth16::<E>::verify_with_processed_vk(&pvk, &[image], &proof).unwrap());
-    
+
     let mut vk_bytes = Vec::new();
     vk.serialize_compressed(&mut vk_bytes).unwrap();
     let mut proof_bytes = Vec::new();
@@ -215,7 +213,12 @@ fn write_artifacts_for_curve<E>(
     fs::create_dir_all(out_dir).unwrap();
     let public_inputs = [image];
     let _ = export_proof::<E, _>(&proof, &public_inputs, out_dir.join("proof.json")).unwrap();
-    let _ = export_vk::<E, _>(&vk, public_inputs.len(), out_dir.join("verification_key.json")).unwrap();
+    let _ = export_vk::<E, _>(
+        &vk,
+        public_inputs.len(),
+        out_dir.join("verification_key.json"),
+    )
+    .unwrap();
 
     write_file(&out_dir.join("vk.bin"), &vk_bytes).unwrap();
     write_file(&out_dir.join("proof.bin"), &proof_bytes).unwrap();
@@ -319,7 +322,10 @@ fn test_mimc_groth16_for_curve<E: Pairing>() {
     let proving_avg = total_proving / SAMPLES;
     let verifying_avg = total_verifying / SAMPLES;
 
-    println!("Average proving time for {curve_name}: {:?} seconds", proving_avg.as_secs_f64());
+    println!(
+        "Average proving time for {curve_name}: {:?} seconds",
+        proving_avg.as_secs_f64()
+    );
     println!(
         "Average verification time for {curve_name}: {:?} seconds",
         verifying_avg.as_secs_f64()

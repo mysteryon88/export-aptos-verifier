@@ -7,7 +7,8 @@ use ark_serialize::CanonicalSerialize;
 use ark_snark::SNARK;
 use ark_snarkjs::{export_proof, export_vk};
 use ark_std::One;
-use ark_std::rand::thread_rng;
+use ark_std::rand::{RngCore, SeedableRng};
+use ark_std::test_rng;
 use std::fs;
 use std::path::Path;
 
@@ -43,7 +44,7 @@ fn public_inputs_json(inputs: &[Fr]) -> String {
 }
 
 fn main() {
-    let mut rng = thread_rng();
+    let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(test_rng().next_u64());
 
     // числа для примера
     let x: u128 = 641;
