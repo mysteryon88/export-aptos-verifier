@@ -18,7 +18,7 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 export_aptos_verifier_core = { package = "export-aptos-verifier-core", version = "0.2.2", path = "../export_aptos_verifier_core" }
-regex = "1"
+regex = "1.12.4"
 
 [dev-dependencies]
 assert_cmd = "2"
