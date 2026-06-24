@@ -242,6 +242,155 @@ fn arkworks_vk_only_mode_generates_without_bundle_flag() {
 }
 
 #[test]
+fn gnark_json_mode_is_auto_detected() {
+    let repo = repo_root();
+    let artifact_dir = repo
+        .join("examples")
+        .join("gnark-native")
+        .join("cubic")
+        .join("artifacts")
+        .join("bn254");
+    let out_dir = temp_output_dir("gnark_json_auto");
+
+    Command::cargo_bin("export-aptos-verifier")
+        .unwrap()
+        .args([
+            "--vk",
+            artifact_dir
+                .join("verification_key_gnark.json")
+                .to_str()
+                .unwrap(),
+            "--proof",
+            artifact_dir.join("proof_gnark.json").to_str().unwrap(),
+            "--public",
+            artifact_dir.join("public.json").to_str().unwrap(),
+            "--out",
+            out_dir.to_str().unwrap(),
+            "--package-name",
+            "gnark_json_auto",
+            "--module-name",
+            "gnark_json_auto",
+            "--account-address",
+            "0xCAFE",
+            "--force",
+        ])
+        .assert()
+        .success();
+
+    assert!(out_dir.join("Move.toml").exists());
+    assert!(out_dir.join("tests").join("verifier_tests.move").exists());
+}
+
+#[test]
+fn gnark_binary_mode_is_auto_detected() {
+    let repo = repo_root();
+    let artifact_dir = repo
+        .join("examples")
+        .join("gnark-native")
+        .join("cubic")
+        .join("artifacts")
+        .join("bls12381");
+    let out_dir = temp_output_dir("gnark_binary_auto");
+
+    Command::cargo_bin("export-aptos-verifier")
+        .unwrap()
+        .args([
+            "--vk",
+            artifact_dir.join("verification_key.bin").to_str().unwrap(),
+            "--proof",
+            artifact_dir.join("proof.bin").to_str().unwrap(),
+            "--public",
+            artifact_dir.join("public.json").to_str().unwrap(),
+            "--out",
+            out_dir.to_str().unwrap(),
+            "--package-name",
+            "gnark_binary_auto",
+            "--module-name",
+            "gnark_binary_auto",
+            "--account-address",
+            "0xCAFE",
+            "--force",
+        ])
+        .assert()
+        .success();
+
+    assert!(out_dir.join("Move.toml").exists());
+    assert!(out_dir.join("tests").join("verifier_tests.move").exists());
+}
+
+#[test]
+fn sp1_groth16_mode_is_auto_detected() {
+    let repo = repo_root();
+    let artifact_dir = repo
+        .join("examples")
+        .join("sp1-groth16")
+        .join("fibonacci")
+        .join("artifacts");
+    let out_dir = temp_output_dir("sp1_groth16_auto");
+
+    Command::cargo_bin("export-aptos-verifier")
+        .unwrap()
+        .args([
+            "--vk",
+            artifact_dir.join("groth16_vk_v5.bin").to_str().unwrap(),
+            "--proof",
+            artifact_dir.join("fibonacci_proof.bin").to_str().unwrap(),
+            "--out",
+            out_dir.to_str().unwrap(),
+            "--package-name",
+            "sp1_groth16_auto",
+            "--module-name",
+            "sp1_groth16_auto",
+            "--account-address",
+            "0xCAFE",
+            "--force",
+        ])
+        .assert()
+        .success();
+
+    assert!(out_dir.join("Move.toml").exists());
+    assert!(out_dir.join("tests").join("verifier_tests.move").exists());
+}
+
+#[test]
+fn auto_detection_errors_include_each_attempted_format() {
+    let input_dir = temp_output_dir("autodetect_error_input");
+    std::fs::create_dir_all(&input_dir).unwrap();
+    let vk_path = input_dir.join("vk.bin");
+    let proof_path = input_dir.join("proof.bin");
+    std::fs::write(&vk_path, b"not a verifier key").unwrap();
+    std::fs::write(&proof_path, b"not a proof").unwrap();
+    let out_dir = temp_output_dir("autodetect_error");
+
+    let assert = Command::cargo_bin("export-aptos-verifier")
+        .unwrap()
+        .args([
+            "--vk",
+            vk_path.to_str().unwrap(),
+            "--proof",
+            proof_path.to_str().unwrap(),
+            "--out",
+            out_dir.to_str().unwrap(),
+            "--package-name",
+            "autodetect_error",
+            "--module-name",
+            "autodetect_error",
+            "--account-address",
+            "0xCAFE",
+            "--force",
+        ])
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(stderr.contains("snarkjs failed"));
+    assert!(stderr.contains("gnark json failed"));
+    assert!(stderr.contains("arkworks failed"));
+    assert!(stderr.contains("gnark binary failed"));
+    assert!(stderr.contains("sp1 failed"));
+}
+
+#[test]
 fn generation_uses_simple_defaults_when_names_are_omitted() {
     let repo = repo_root();
     let artifact_dir = repo

@@ -49,6 +49,5 @@ yarn-error.log*
 *.tgz
 *.7z
 
-*.bin
 *.hex
 tmp_snark_convert/

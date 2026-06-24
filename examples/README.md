@@ -8,6 +8,8 @@ Run commands in this file from the `export-aptos-verifier` directory.
 
 - `ark-mimc`: Rust arkworks example that exports BN254 and BLS12-381 `verification_key.json`, `proof.json`, and compact `groth16_artifacts.json` bundles.
 - `MulCircuit`: Rust BLS12-381 multiplication circuit that exports snarkjs-style `verification_key.json`, `proof.json`, and `public.json`.
+- `gnark-native/cubic`: native Gnark BN254 and BLS12-381 JSON plus `vk.WriteTo` / `proof.WriteTo` binary artifacts.
+- `sp1-groth16/fibonacci`: SP1 Groth16 wrapper verification keys and serialized proof-with-public-values examples copied from [`mysteryon88/export-sui-verifier`](https://github.com/mysteryon88/export-sui-verifier) and reused to test Aptos SP1 generation.
 - `generated`: Aptos Move packages generated from the checked artifacts.
 
 Proof-based generated packages include `tests/verifier_tests.move`. VK-only packages are generated without tests and are checked by compilation.
@@ -41,6 +43,12 @@ cargo run -- --vk examples/ark-mimc/artifacts/bn254/verification_key.json --proo
 cargo run -- --vk examples/ark-mimc/artifacts/bls12_381/verification_key.json --proof examples/ark-mimc/artifacts/bls12_381/proof.json --out examples/generated/ark_mimc_bls12381_snarkjs --account-address 0xCAFE --force
 
 cargo run -- --vk examples/MulCircuit/artifacts/bls12_381/verification_key.json --proof examples/MulCircuit/artifacts/bls12_381/proof.json --public examples/MulCircuit/artifacts/bls12_381/public.json --out examples/generated/mul_circuit_bls12381_snarkjs --account-address 0xCAFE --force
+
+cargo run -- --vk examples/gnark-native/cubic/artifacts/bn254/verification_key_gnark.json --proof examples/gnark-native/cubic/artifacts/bn254/proof_gnark.json --public examples/gnark-native/cubic/artifacts/bn254/public.json --out examples/generated/gnark_cubic_bn254_json --account-address 0xCAFE --force
+
+cargo run -- --vk examples/gnark-native/cubic/artifacts/bls12381/verification_key.bin --proof examples/gnark-native/cubic/artifacts/bls12381/proof.bin --public examples/gnark-native/cubic/artifacts/bls12381/public.json --out examples/generated/gnark_cubic_bls12381_bin --account-address 0xCAFE --force
+
+cargo run -- --vk examples/sp1-groth16/fibonacci/artifacts/groth16_vk_v5.bin --proof examples/sp1-groth16/fibonacci/artifacts/fibonacci_proof.bin --out examples/generated/sp1_fibonacci_groth16 --account-address 0xCAFE --force
 ```
 
 Add `--run-aptos-test` to any command above to run `aptos move test --package-dir <out>` immediately after generation.
@@ -55,6 +63,9 @@ aptos move test --package-dir examples/generated/ark_mimc_bls12381_arkworks
 aptos move test --package-dir examples/generated/ark_mimc_bn254_snarkjs
 aptos move test --package-dir examples/generated/ark_mimc_bls12381_snarkjs
 aptos move test --package-dir examples/generated/mul_circuit_bls12381_snarkjs
+aptos move test --package-dir examples/generated/gnark_cubic_bn254_json
+aptos move test --package-dir examples/generated/gnark_cubic_bls12381_bin
+aptos move test --package-dir examples/generated/sp1_fibonacci_groth16
 ```
 
 ## 4. Generate VK-Only Packages

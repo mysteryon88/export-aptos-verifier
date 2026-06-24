@@ -37,6 +37,9 @@ pub enum SourceFormat {
     SnarkjsJson,
     Arkworks,
     ArkworksCompact,
+    GnarkJson,
+    GnarkBinary,
+    Sp1Groth16,
 }
 
 #[derive(Debug, Clone)]

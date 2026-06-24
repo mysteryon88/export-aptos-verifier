@@ -1,11 +1,14 @@
 use std::fs;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use export_aptos_verifier_core::curves::create_adapter;
 use export_aptos_verifier_core::formats::{
-    load_compact_bundle, load_snarkjs_json_inputs, load_snarkjs_json_inputs_with_optional_proof,
+    load_compact_bundle, load_gnark_binary_inputs, load_gnark_json_inputs,
+    load_snarkjs_json_inputs, load_snarkjs_json_inputs_with_optional_proof,
+    load_sp1_groth16_inputs,
 };
 use export_aptos_verifier_core::movegen::{
     generate_move_package, GenerateMovePackageOptions, MovegenMode,
@@ -34,39 +37,43 @@ fn aptos_cli_guard() -> MutexGuard<'static, ()> {
     APTOS_TEST_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .unwrap()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn aptos_move_test(package_dir: &PathBuf) {
-    let _guard = aptos_cli_guard();
-    let output = Command::new("aptos")
-        .args(["move", "test", "--package-dir"])
-        .arg(package_dir)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "aptos move test failed for {}\nstdout:\n{}\nstderr:\n{}",
-        package_dir.display(),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
+    aptos_move(package_dir, "test");
 }
 
 fn aptos_move_compile(package_dir: &PathBuf) {
+    aptos_move(package_dir, "compile");
+}
+
+fn aptos_move(package_dir: &PathBuf, command: &str) {
     let _guard = aptos_cli_guard();
     let output = Command::new("aptos")
-        .args(["move", "compile", "--package-dir"])
+        .args(["move", command, "--package-dir"])
         .arg(package_dir)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "aptos move compile failed for {}\nstdout:\n{}\nstderr:\n{}",
-        package_dir.display(),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
+        .output();
+
+    match output {
+        Ok(output) => assert!(
+            output.status.success(),
+            "aptos move {command} failed for {}\nstdout:\n{}\nstderr:\n{}",
+            package_dir.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ),
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            eprintln!(
+                "skipping aptos move {command} for {}: Aptos CLI not found",
+                package_dir.display()
+            );
+        }
+        Err(err) => panic!(
+            "failed to run aptos move {command} for {}: {err}",
+            package_dir.display()
+        ),
+    }
 }
 
 #[test]
@@ -350,4 +357,109 @@ fn ark_mimc_bls_bundle_inputs_generate_a_package() {
     .unwrap();
 
     aptos_move_test(&out_dir);
+}
+
+#[test]
+fn gnark_native_json_inputs_generate_aptos_package_files() {
+    let artifact_dir = repo_root()
+        .join("examples")
+        .join("gnark-native")
+        .join("cubic")
+        .join("artifacts")
+        .join("bn254");
+    let inputs = load_gnark_json_inputs(
+        &artifact_dir.join("verification_key_gnark.json"),
+        Some(&artifact_dir.join("proof_gnark.json")),
+        Some(&artifact_dir.join("public.json")),
+        None,
+    )
+    .unwrap();
+
+    let out_dir = temp_output_dir("gnark_json_bn254");
+    generate_move_package(
+        &out_dir,
+        create_adapter("bn254").unwrap().as_ref(),
+        &inputs,
+        &GenerateMovePackageOptions {
+            package_name: "gnark_json_bn254",
+            module_name: "gnark_json_bn254",
+            account_address: "0xCAFE",
+            mode: MovegenMode::Entry,
+            force: true,
+        },
+    )
+    .unwrap();
+
+    assert!(out_dir.join("Move.toml").exists());
+    assert!(out_dir.join("sources").join("verifier.move").exists());
+    assert!(out_dir.join("tests").join("verifier_tests.move").exists());
+}
+
+#[test]
+fn gnark_native_binary_inputs_generate_aptos_package_files() {
+    let artifact_dir = repo_root()
+        .join("examples")
+        .join("gnark-native")
+        .join("cubic")
+        .join("artifacts")
+        .join("bls12381");
+    let inputs = load_gnark_binary_inputs(
+        &artifact_dir.join("verification_key.bin"),
+        Some(&artifact_dir.join("proof.bin")),
+        Some(&artifact_dir.join("public.json")),
+        "bls12381",
+    )
+    .unwrap();
+
+    let out_dir = temp_output_dir("gnark_bin_bls12381");
+    generate_move_package(
+        &out_dir,
+        create_adapter("bls12381").unwrap().as_ref(),
+        &inputs,
+        &GenerateMovePackageOptions {
+            package_name: "gnark_bin_bls12381",
+            module_name: "gnark_bin_bls12381",
+            account_address: "0xCAFE",
+            mode: MovegenMode::Entry,
+            force: true,
+        },
+    )
+    .unwrap();
+
+    assert!(out_dir.join("Move.toml").exists());
+    assert!(out_dir.join("sources").join("verifier.move").exists());
+    assert!(out_dir.join("tests").join("verifier_tests.move").exists());
+}
+
+#[test]
+fn sp1_groth16_inputs_generate_aptos_package_files() {
+    let artifact_dir = repo_root()
+        .join("examples")
+        .join("sp1-groth16")
+        .join("fibonacci")
+        .join("artifacts");
+    let inputs = load_sp1_groth16_inputs(
+        &artifact_dir.join("groth16_vk_v5.bin"),
+        &artifact_dir.join("fibonacci_proof.bin"),
+    )
+    .unwrap();
+
+    let out_dir = temp_output_dir("sp1_groth16");
+    generate_move_package(
+        &out_dir,
+        create_adapter("bn254").unwrap().as_ref(),
+        &inputs,
+        &GenerateMovePackageOptions {
+            package_name: "sp1_groth16",
+            module_name: "sp1_groth16",
+            account_address: "0xCAFE",
+            mode: MovegenMode::Entry,
+            force: true,
+        },
+    )
+    .unwrap();
+
+    assert!(out_dir.join("Move.toml").exists());
+    assert!(out_dir.join("sources").join("verifier.move").exists());
+    assert!(out_dir.join("tests").join("verifier_tests.move").exists());
 }

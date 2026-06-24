@@ -22,6 +22,38 @@ export-aptos-verifier \
   --force
 ```
 
+Native Gnark JSON mode:
+
+```sh
+export-aptos-verifier \
+  --vk ./verification_key_gnark.json \
+  --proof ./proof_gnark.json \
+  --public ./public.json \
+  --out ./generated/gnark_json_verifier \
+  --force
+```
+
+Native Gnark binary mode (`vk.WriteTo` / `proof.WriteTo`):
+
+```sh
+export-aptos-verifier \
+  --vk ./verification_key.bin \
+  --proof ./proof.bin \
+  --public ./public.json \
+  --out ./generated/gnark_binary_verifier \
+  --force
+```
+
+SP1 Groth16 wrapper mode:
+
+```sh
+export-aptos-verifier \
+  --vk ./sp1_groth16_vk.bin \
+  --proof ./proof_with_public_values.bin \
+  --out ./generated/sp1_verifier \
+  --force
+```
+
 Common options:
 
 - `--package-name <name>`: defaults to the sanitized `--out` directory name
@@ -33,7 +65,7 @@ Common options:
 - `--prepared`: intentionally returns `ERR_PREPARED_NOT_IMPLEMENTED`
 - `--force`: overwrites the output directory
 
-`--proof` is optional. Supplying proof data enables local verification and generated Move tests. `--public` is optional when `proof.json` already contains `publicSignals`.
+`--proof` is optional. Supplying proof data enables local verification and generated Move tests. `--public` is optional when `proof.json` already contains `publicSignals`. SP1 proofs carry public values inside the serialized proof wrapper, so SP1 commands do not use `--public`.
 
 `proof-data` is the only subcommand:
 
@@ -48,6 +80,9 @@ It prints Move helper functions for `proof_a_bytes()`, `proof_b_bytes()`, `proof
 Supported inputs:
 
 - snarkjs-compatible JSON
+- native Gnark JSON
+- native Gnark binary `vk.WriteTo` / `proof.WriteTo`
+- SP1 Groth16 wrapper verification key plus serialized `SP1ProofWithPublicValues`
 - Arkworks VK/proof JSON or raw hex inputs
 - compact Arkworks bundles
 

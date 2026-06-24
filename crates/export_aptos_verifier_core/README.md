@@ -5,9 +5,12 @@ Library crate for loading Groth16 artifacts and rendering Aptos Move verifier pa
 ## Capabilities
 
 - loads snarkjs-compatible JSON inputs
+- loads native Gnark JSON verification keys, proofs, and public inputs
+- loads native Gnark `vk.WriteTo` / `proof.WriteTo` binary artifacts
+- loads SP1 Groth16 wrapper verification keys and serialized `SP1ProofWithPublicValues`
 - loads Arkworks VK/proof JSON or raw hex inputs
 - loads compact Arkworks bundle JSON
-- infers the curve and input format from artifact metadata
+- infers the curve and input format from artifact metadata or binary decoding
 - supports BN254 and BLS12-381
 - validates protocol, curve, subgroup membership, input counts, and field bounds
 - serializes verification keys, proofs, and public inputs for Aptos `crypto_algebra`
@@ -25,7 +28,7 @@ Generated modules expose:
 
 ## Main Modules
 
-- `formats`: high-level loaders for snarkjs JSON and Arkworks inputs
+- `formats`: high-level loaders for snarkjs JSON, Gnark JSON/BIN, SP1 Groth16, and Arkworks inputs
 - `parser::arkworks`: direct Arkworks VK/proof/public input parser
 - `snarkjs`: strict snarkjs-compatible JSON parsing
 - `model`: normalized Groth16 IR
@@ -39,13 +42,18 @@ Use the crate directly when embedding generation in another Rust tool. Most user
 
 ```rust
 use export_aptos_verifier_core::curves::create_adapter;
-use export_aptos_verifier_core::formats::load_compact_bundle;
+use export_aptos_verifier_core::formats::load_gnark_json_inputs;
 use export_aptos_verifier_core::movegen::{
     generate_move_package, GenerateMovePackageOptions, MovegenMode,
 };
 
 # fn main() -> export_aptos_verifier_core::Result<()> {
-let inputs = load_compact_bundle("groth16_artifacts.json".as_ref(), None)?;
+let inputs = load_gnark_json_inputs(
+    "verification_key_gnark.json".as_ref(),
+    Some("proof_gnark.json".as_ref()),
+    Some("public.json".as_ref()),
+    None,
+)?;
 let adapter = create_adapter(inputs.curve.canonical_name())?;
 
 generate_move_package(
