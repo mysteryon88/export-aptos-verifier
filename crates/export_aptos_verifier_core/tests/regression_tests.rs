@@ -254,3 +254,56 @@ fn generated_readme_documents_root_generate_flags() {
 
     fs::remove_dir_all(out).unwrap();
 }
+
+fn compact_bundle_with_appended_hex_field(
+    name: &str,
+    field: &str,
+    suffix: &str,
+) -> (PathBuf, PathBuf) {
+    let source = repo_root()
+        .join("examples")
+        .join("ark-mimc")
+        .join("artifacts")
+        .join("bn254")
+        .join("groth16_artifacts.json");
+    let mut json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(source).unwrap()).unwrap();
+    let original = json
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .unwrap()
+        .to_string();
+    json[field] = serde_json::Value::String(format!("{original}{suffix}"));
+
+    let dir = fresh_dir(name);
+    let bundle = dir.join("groth16_artifacts.json");
+    fs::write(&bundle, serde_json::to_string(&json).unwrap()).unwrap();
+    (dir, bundle)
+}
+
+#[test]
+fn compact_bundle_rejects_trailing_vk_bytes() {
+    let (dir, bundle) = compact_bundle_with_appended_hex_field("trailing_vk_bytes", "vk", "00");
+
+    let err = load_compact_bundle(&bundle, None).unwrap_err();
+
+    assert!(
+        err.to_string().contains("trailing bytes"),
+        "unexpected error: {err}"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn compact_bundle_rejects_trailing_proof_bytes() {
+    let (dir, bundle) =
+        compact_bundle_with_appended_hex_field("trailing_proof_bytes", "proof", "00");
+
+    let err = load_compact_bundle(&bundle, None).unwrap_err();
+
+    assert!(
+        err.to_string().contains("trailing bytes"),
+        "unexpected error: {err}"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}

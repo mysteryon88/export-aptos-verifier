@@ -7,6 +7,7 @@ module {{named_address}}::{{module_name}}_tests {
     fun proof_b_bytes(): vector<u8> { {{{proof_b}}} }
     fun proof_c_bytes(): vector<u8> { {{{proof_c}}} }
     fun public_inputs_bytes(): vector<vector<u8>> { {{{public_inputs_rendered}}} }
+    fun invalid_public_inputs_bytes(): vector<vector<u8>> { {{{invalid_public_inputs_rendered}}} }
 
     #[test]
     fun test_valid_proof() {
@@ -49,17 +50,8 @@ module {{named_address}}::{{module_name}}_tests {
             );
             assert!(!ok, 1);
         } else {
-            let last_input = vector::pop_back(&mut public_inputs);
-            if (vector::is_empty(&last_input)) {
-                vector::push_back(&mut last_input, 1);
-            } else {
-                let first = *vector::borrow(&last_input, 0);
-                vector::pop_back(&mut last_input);
-                vector::push_back(&mut last_input, first + 1);
-            };
-            vector::push_back(&mut public_inputs, last_input);
             let ok = {{module_name}}::verify(
-                public_inputs,
+                invalid_public_inputs_bytes(),
                 proof_a_bytes(),
                 proof_b_bytes(),
                 proof_c_bytes(),

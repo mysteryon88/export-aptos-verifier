@@ -393,6 +393,7 @@ fn gnark_native_json_inputs_generate_aptos_package_files() {
     assert!(out_dir.join("Move.toml").exists());
     assert!(out_dir.join("sources").join("verifier.move").exists());
     assert!(out_dir.join("tests").join("verifier_tests.move").exists());
+    aptos_move_test(&out_dir);
 }
 
 #[test]
@@ -429,6 +430,7 @@ fn gnark_native_binary_inputs_generate_aptos_package_files() {
     assert!(out_dir.join("Move.toml").exists());
     assert!(out_dir.join("sources").join("verifier.move").exists());
     assert!(out_dir.join("tests").join("verifier_tests.move").exists());
+    aptos_move_test(&out_dir);
 }
 
 #[test]
@@ -462,4 +464,5 @@ fn sp1_groth16_inputs_generate_aptos_package_files() {
     assert!(out_dir.join("Move.toml").exists());
     assert!(out_dir.join("sources").join("verifier.move").exists());
     assert!(out_dir.join("tests").join("verifier_tests.move").exists());
+    aptos_move_test(&out_dir);
 }

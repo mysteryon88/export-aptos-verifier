@@ -17,6 +17,7 @@ pub struct MovegenTemplateInput {
     pub proof_c: String,
     pub public_inputs_bytes: Vec<String>,
     pub public_inputs_rendered: String,
+    pub invalid_public_inputs_rendered: String,
     pub include_entry: bool,
 }
 

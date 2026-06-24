@@ -238,11 +238,13 @@ fn parse_bn254_vk(vk_hex: &str) -> Result<VerificationKey> {
 fn decode_verifying_key_bn254(vk_hex: &str) -> Result<ArkVerifyingKey<Bn254>> {
     let bytes = decode_hex(vk_hex, "vk")?;
     let mut cursor = Cursor::new(bytes);
-    ArkVerifyingKey::<Bn254>::deserialize_compressed(&mut cursor).map_err(|e| {
+    let vk = ArkVerifyingKey::<Bn254>::deserialize_compressed(&mut cursor).map_err(|e| {
         Error::Serialization(format!(
             "failed to deserialize BN254 verifying key from hex: {e:?}"
         ))
-    })
+    })?;
+    ensure_no_trailing_bytes(&cursor, "BN254 verifying key")?;
+    Ok(vk)
 }
 
 fn parse_bn254_proof(proof_hex: &str) -> Result<Proof> {
@@ -259,9 +261,11 @@ fn parse_bn254_proof(proof_hex: &str) -> Result<Proof> {
 fn decode_proof_bn254(proof_hex: &str) -> Result<ArkProof<Bn254>> {
     let bytes = decode_hex(proof_hex, "proof")?;
     let mut cursor = Cursor::new(bytes);
-    ArkProof::deserialize_compressed(&mut cursor).map_err(|e| {
+    let proof = ArkProof::deserialize_compressed(&mut cursor).map_err(|e| {
         Error::Serialization(format!("failed to deserialize BN254 proof from hex: {e:?}"))
-    })
+    })?;
+    ensure_no_trailing_bytes(&cursor, "BN254 proof")?;
+    Ok(proof)
 }
 
 fn parse_bls_vk(vk_hex: &str) -> Result<VerificationKey> {
@@ -291,11 +295,13 @@ fn parse_bls_vk(vk_hex: &str) -> Result<VerificationKey> {
 fn decode_verifying_key_bls(vk_hex: &str) -> Result<ArkVerifyingKey<Bls12_381>> {
     let bytes = decode_hex(vk_hex, "vk")?;
     let mut cursor = Cursor::new(bytes);
-    ArkVerifyingKey::<Bls12_381>::deserialize_compressed(&mut cursor).map_err(|e| {
+    let vk = ArkVerifyingKey::<Bls12_381>::deserialize_compressed(&mut cursor).map_err(|e| {
         Error::Serialization(format!(
             "failed to deserialize BLS12-381 verifying key from hex: {e:?}"
         ))
-    })
+    })?;
+    ensure_no_trailing_bytes(&cursor, "BLS12-381 verifying key")?;
+    Ok(vk)
 }
 
 fn parse_bls_proof(proof_hex: &str) -> Result<Proof> {
@@ -312,11 +318,29 @@ fn parse_bls_proof(proof_hex: &str) -> Result<Proof> {
 fn decode_proof_bls(proof_hex: &str) -> Result<ArkProof<Bls12_381>> {
     let bytes = decode_hex(proof_hex, "proof")?;
     let mut cursor = Cursor::new(bytes);
-    ArkProof::deserialize_compressed(&mut cursor).map_err(|e| {
+    let proof = ArkProof::deserialize_compressed(&mut cursor).map_err(|e| {
         Error::Serialization(format!(
             "failed to deserialize BLS12-381 proof from hex: {e:?}"
         ))
-    })
+    })?;
+    ensure_no_trailing_bytes(&cursor, "BLS12-381 proof")?;
+    Ok(proof)
+}
+
+fn ensure_no_trailing_bytes(cursor: &Cursor<Vec<u8>>, field: &str) -> Result<()> {
+    let position: usize = cursor
+        .position()
+        .try_into()
+        .map_err(|_| Error::Serialization(format!("{field} cursor position overflow")))?;
+    let len = cursor.get_ref().len();
+    if position == len {
+        return Ok(());
+    }
+
+    Err(Error::Serialization(format!(
+        "{field} has {} trailing bytes after Arkworks compressed artifact",
+        len.saturating_sub(position)
+    )))
 }
 
 fn point_from_bn254_g1(point: &Bn254G1Affine) -> SnarkJsG1 {

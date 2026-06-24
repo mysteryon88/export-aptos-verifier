@@ -138,6 +138,16 @@ pub fn generate_move_package(
         })
         .collect::<Result<_>>()?;
     let public_inputs_rendered = render::vector_of_hex(&public_inputs_bytes);
+    let invalid_public_inputs = invalid_public_inputs(public_inputs);
+    let invalid_public_inputs_bytes: Vec<String> = invalid_public_inputs
+        .iter()
+        .map(|value| {
+            adapter
+                .serialize_fr_public_input(value)
+                .map(|bytes| move_hex_literal(&bytes))
+        })
+        .collect::<Result<_>>()?;
+    let invalid_public_inputs_rendered = render::vector_of_hex(&invalid_public_inputs_bytes);
 
     let input = MovegenTemplateInput {
         package_name: options.package_name.to_string(),
@@ -155,6 +165,7 @@ pub fn generate_move_package(
         proof_c,
         public_inputs_bytes,
         public_inputs_rendered,
+        invalid_public_inputs_rendered,
         include_entry: options.mode.include_entry(),
     };
 
@@ -209,6 +220,18 @@ pub fn generate_move_package(
     })?;
 
     Ok(())
+}
+
+fn invalid_public_inputs(public_inputs: &[String]) -> Vec<String> {
+    let mut invalid = public_inputs.to_vec();
+    if let Some(last) = invalid.last_mut() {
+        *last = if last == "0" {
+            "1".to_string()
+        } else {
+            "0".to_string()
+        };
+    }
+    invalid
 }
 
 fn validate_account_address(value: &str) -> Result<()> {
