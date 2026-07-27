@@ -1,4 +1,5 @@
 use ark_bn254::{Bn254, Fq, Fq2, Fr, G1Affine, G2Affine};
+use ark_ec::AffineRepr;
 use ark_ff::{BigInteger, Field, PrimeField, Zero};
 use ark_groth16::{prepare_verifying_key, Groth16, Proof, VerifyingKey};
 use num_bigint::BigUint;
@@ -43,6 +44,10 @@ impl CurveAdapter for Bn254Adapter {
 
     fn serialize_fr_public_input(&self, value: &DecimalValue) -> Result<Vec<u8>> {
         serialize_fr_le(value)
+    }
+
+    fn scalar_modulus_le(&self) -> Vec<u8> {
+        to_le_padded_bytes(&BigUint::from_bytes_le(&Fr::MODULUS.to_bytes_le()), 32)
     }
 
     fn local_verify(&self, inputs: &Groth16VerifierInputs) -> Result<bool> {
@@ -144,6 +149,9 @@ fn normalize_g1(point: &Groth16G1Point) -> Result<G1Affine> {
     let z_inv3 = z_inv2 * z_inv;
     let affine = G1Affine::new_unchecked(x * z_inv2, y * z_inv3);
 
+    if affine.is_zero() {
+        return Err(Error::MalformedG1("g1 identity is not allowed".to_string()));
+    }
     if !affine.is_on_curve() {
         return Err(Error::PointNotOnCurve(
             "g1 point is not on curve".to_string(),
@@ -182,6 +190,9 @@ fn normalize_g2(point: &Groth16G2Point) -> Result<G2Affine> {
     let z_inv3 = z_inv2 * z_inv;
     let affine = G2Affine::new_unchecked(x * z_inv2, y * z_inv3);
 
+    if affine.is_zero() {
+        return Err(Error::MalformedG2("g2 identity is not allowed".to_string()));
+    }
     if !affine.is_on_curve() {
         return Err(Error::PointNotOnCurve(
             "g2 point is not on curve".to_string(),

@@ -12,7 +12,8 @@ use export_aptos_verifier_core::formats::{
 };
 use export_aptos_verifier_core::local_verify;
 use export_aptos_verifier_core::movegen::{
-    generate_move_package, proof_data_snippet, GenerateMovePackageOptions, MovegenMode,
+    generate_move_package_with_framework_rev, proof_data_snippet, GenerateMovePackageOptions,
+    MovegenMode, DEFAULT_APTOS_FRAMEWORK_REV,
 };
 
 #[derive(Parser)]
@@ -60,6 +61,9 @@ struct GenerateArgs {
     skip_local_verify: bool,
     #[arg(long, default_value_t = false)]
     prepared: bool,
+    /// Full AptosFramework commit SHA used in generated Move.toml.
+    #[arg(long, default_value = DEFAULT_APTOS_FRAMEWORK_REV)]
+    aptos_framework_rev: String,
     #[arg(long)]
     bundle: Option<PathBuf>,
 }
@@ -146,6 +150,7 @@ fn run_generate(args: GenerateArgs) -> Result<()> {
         force,
         skip_local_verify,
         prepared,
+        aptos_framework_rev,
         bundle,
     } = args;
 
@@ -185,7 +190,7 @@ fn run_generate(args: GenerateArgs) -> Result<()> {
         }
     }
 
-    generate_move_package(
+    generate_move_package_with_framework_rev(
         &out,
         adapter.as_ref(),
         &inputs,
@@ -196,6 +201,7 @@ fn run_generate(args: GenerateArgs) -> Result<()> {
             mode: mode.into_move_mode(),
             force,
         },
+        &aptos_framework_rev,
     )?;
 
     if should_run_aptos_test {

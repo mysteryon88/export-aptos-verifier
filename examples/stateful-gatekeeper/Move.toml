@@ -1,12 +1,11 @@
 [package]
-name = "{{package_name}}"
+name = "stateful_gatekeeper"
 version = "1.0.0"
-upgrade_policy = "immutable"
 
 [addresses]
-{{named_address}} = "{{account_address}}"
+stateful_gatekeeper = "0xCAFE"
 
 [dependencies.AptosFramework]
 git = "https://github.com/aptos-labs/aptos-core.git"
-rev = "{{aptos_framework_rev}}"
+rev = "7f900aa660b13bb674924f279f1fd7d55e0cf79e"
 subdir = "aptos-move/framework/aptos-framework"

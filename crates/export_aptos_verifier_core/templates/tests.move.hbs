@@ -8,6 +8,12 @@ module {{named_address}}::{{module_name}}_tests {
     fun proof_c_bytes(): vector<u8> { {{{proof_c}}} }
     fun public_inputs_bytes(): vector<vector<u8>> { {{{public_inputs_rendered}}} }
     fun invalid_public_inputs_bytes(): vector<vector<u8>> { {{{invalid_public_inputs_rendered}}} }
+    {{#if has_public_inputs}}
+    fun noncanonical_public_inputs_bytes(): vector<vector<u8>> { {{{noncanonical_public_inputs_rendered}}} }
+    fun modulus_plus_one_public_inputs_bytes(): vector<vector<u8>> { {{{modulus_plus_one_public_inputs_rendered}}} }
+    fun short_public_inputs_bytes(): vector<vector<u8>> { {{{short_public_inputs_rendered}}} }
+    fun long_public_inputs_bytes(): vector<vector<u8>> { {{{long_public_inputs_rendered}}} }
+    {{/if}}
 
     #[test]
     fun test_valid_proof() {
@@ -59,4 +65,50 @@ module {{named_address}}::{{module_name}}_tests {
             assert!(!ok, 1);
         };
     }
+
+    {{#if has_public_inputs}}
+    #[test]
+    #[expected_failure(abort_code = 1, location = {{named_address}}::{{module_name}})]
+    fun test_scalar_modulus_is_rejected() {
+        {{module_name}}::verify(
+            noncanonical_public_inputs_bytes(),
+            proof_a_bytes(),
+            proof_b_bytes(),
+            proof_c_bytes(),
+        );
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 1, location = {{named_address}}::{{module_name}})]
+    fun test_scalar_modulus_plus_one_is_rejected() {
+        {{module_name}}::verify(
+            modulus_plus_one_public_inputs_bytes(),
+            proof_a_bytes(),
+            proof_b_bytes(),
+            proof_c_bytes(),
+        );
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 1, location = {{named_address}}::{{module_name}})]
+    fun test_short_scalar_is_rejected() {
+        {{module_name}}::verify(
+            short_public_inputs_bytes(),
+            proof_a_bytes(),
+            proof_b_bytes(),
+            proof_c_bytes(),
+        );
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 1, location = {{named_address}}::{{module_name}})]
+    fun test_long_scalar_is_rejected() {
+        {{module_name}}::verify(
+            long_public_inputs_bytes(),
+            proof_a_bytes(),
+            proof_b_bytes(),
+            proof_c_bytes(),
+        );
+    }
+    {{/if}}
 }

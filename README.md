@@ -92,3 +92,20 @@ export-aptos-verifier --vk ./verification_key.json --proof ./proof.json --out ./
   - [Gnark](https://github.com/Consensys/gnark)
   - [SP1](https://github.com/succinctlabs/sp1)
   - [Arkworks](https://github.com/arkworks-rs)
+
+## Security considerations
+
+Generated verifiers are stateless: a valid Groth16 proof can be submitted repeatedly. An application authorizing state changes must include a domain-separated nullifier in the circuit public inputs, bind the statement to the account/package/module, Aptos network, operation, and generated VK fingerprint, and store the nullifier only after successful verification. See [the resource-based stateful gatekeeper example](./examples/stateful-gatekeeper/).
+
+Generated packages reject wrong-length and non-canonical scalar encodings, malformed points, and identity VK points before pairing verification. All supported artifact formats use the same validation path.
+
+The generated `verifier-manifest.json` and `vk_fingerprint()` accessor identify the canonical VK embedded in the package. This SHA-256 value provides integrity and circuit/VK binding only; it does not authenticate the artifact, prove an honest trusted setup ceremony, or eliminate toxic waste. Distribute the expected fingerprint through an authenticated channel and review generated Move before production deployment.
+
+Generated Aptos packages use `upgrade_policy = "immutable"` so an upgrade capability cannot replace the embedded VK or verifier logic after deployment.
+
+## Migration notes
+
+- Aptos Framework is pinned by default to full commit `7f900aa660b13bb674924f279f1fd7d55e0cf79e`, the framework revision shipped with Aptos CLI 9.4.0.
+- Override it only with another reviewed 40-character commit SHA using `--aptos-framework-rev <sha>`; branch names and abbreviated revisions are rejected.
+- Generated output now includes the framework SHA and canonical VK fingerprint in `verifier-manifest.json`, plus `vk_fingerprint()`.
+- Generated packages are now immutable. Existing deployment workflows that relied on compatible upgrades must publish a new package and migrate callers explicitly.

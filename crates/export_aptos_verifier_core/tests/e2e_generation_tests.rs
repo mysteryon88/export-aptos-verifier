@@ -1,5 +1,4 @@
 use std::fs;
-use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -63,12 +62,6 @@ fn aptos_move(package_dir: &PathBuf, command: &str) {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         ),
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            eprintln!(
-                "skipping aptos move {command} for {}: Aptos CLI not found",
-                package_dir.display()
-            );
-        }
         Err(err) => panic!(
             "failed to run aptos move {command} for {}: {err}",
             package_dir.display()
@@ -148,6 +141,44 @@ fn ark_mimc_bn254_json_inputs_generate_a_package() {
     assert!(!generated_verifier.contains("vector::empty"));
 
     aptos_move_test(&out_dir);
+}
+
+#[test]
+fn bn254_library_and_test_modes_execute_generated_move_tests() {
+    let artifact_dir = repo_root()
+        .join("examples")
+        .join("ark-mimc")
+        .join("artifacts")
+        .join("bn254");
+    let inputs = load_snarkjs_json_inputs(
+        &artifact_dir.join("verification_key.json"),
+        &artifact_dir.join("proof.json"),
+        None,
+    )
+    .unwrap();
+
+    for (mode_name, mode) in [
+        ("library", MovegenMode::Library),
+        ("test", MovegenMode::Test),
+    ] {
+        let package_name = format!("ark_mimc_bn254_{mode_name}_mode");
+        let out_dir = temp_output_dir(&package_name);
+        generate_move_package(
+            &out_dir,
+            create_adapter("bn254").unwrap().as_ref(),
+            &inputs,
+            &GenerateMovePackageOptions {
+                package_name: &package_name,
+                module_name: "verifier",
+                account_address: "0xCAFE",
+                mode,
+                force: true,
+            },
+        )
+        .unwrap();
+
+        aptos_move_test(&out_dir);
+    }
 }
 
 #[test]

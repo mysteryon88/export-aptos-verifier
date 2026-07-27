@@ -6,6 +6,7 @@ pub struct MovegenTemplateInput {
     pub module_name: String,
     pub account_address: String,
     pub named_address: String,
+    pub aptos_framework_rev: String,
     pub vk_alpha_g1: String,
     pub vk_beta_g2: String,
     pub vk_gamma_g2: String,
@@ -18,6 +19,12 @@ pub struct MovegenTemplateInput {
     pub public_inputs_bytes: Vec<String>,
     pub public_inputs_rendered: String,
     pub invalid_public_inputs_rendered: String,
+    pub noncanonical_public_inputs_rendered: String,
+    pub modulus_plus_one_public_inputs_rendered: String,
+    pub short_public_inputs_rendered: String,
+    pub long_public_inputs_rendered: String,
+    pub has_public_inputs: bool,
+    pub vk_fingerprint_bytes: String,
     pub include_entry: bool,
 }
 

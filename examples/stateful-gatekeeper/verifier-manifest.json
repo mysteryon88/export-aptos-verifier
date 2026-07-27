@@ -1,0 +1,21 @@
+{
+  "schema": "groth16-verifier-manifest-v1",
+  "generator": {
+    "name": "export-aptos-verifier-core",
+    "version": "0.4.0"
+  },
+  "protocol": "groth16",
+  "curve": "bn254",
+  "public_inputs": 1,
+  "vk_sha256": "c553d6202bc22f59c47b95e01b8bae2f9fafa1ecaeb69e90c356b1595d703b47",
+  "circuit_sha256": null,
+  "source_format": "snarkjs-json",
+  "serialization_format": "aptos-crypto-algebra-canonical-uncompressed-little-endian-v1",
+  "package": "stateful_gatekeeper",
+  "module": "verifier",
+  "account_address": "0xCAFE",
+  "dependencies": {
+    "framework_revision": "7f900aa660b13bb674924f279f1fd7d55e0cf79e",
+    "arkworks": "0.6"
+  }
+}

@@ -22,6 +22,8 @@ module {{named_address}}::{{module_name}} {
 
     const EINVALID_PROOF: u64 = 1;
 
+    public fun vk_fingerprint(): vector<u8> { {{{vk_fingerprint_bytes}}} }
+
     fun vk_alpha_g1_bytes(): vector<u8> { {{{vk_alpha_g1}}} }
     fun vk_beta_g2_bytes(): vector<u8> { {{{vk_beta_g2}}} }
     fun vk_gamma_g2_bytes(): vector<u8> { {{{vk_gamma_g2}}} }
@@ -123,7 +125,11 @@ module {{named_address}}::{{module_name}} {
         if (option::is_none(&point)) {
             abort EINVALID_PROOF;
         };
-        option::destroy_some(point)
+        let point = option::destroy_some(point);
+        if (eq(&point, &zero<Bls12381G1>())) {
+            abort EINVALID_PROOF;
+        };
+        point
     }
 
     fun deserialize_or_abort_bls12381_g2(value: &vector<u8>): Element<Bls12381G2> {
@@ -131,7 +137,11 @@ module {{named_address}}::{{module_name}} {
         if (option::is_none(&point)) {
             abort EINVALID_PROOF;
         };
-        option::destroy_some(point)
+        let point = option::destroy_some(point);
+        if (eq(&point, &zero<Bls12381G2>())) {
+            abort EINVALID_PROOF;
+        };
+        point
     }
 
     fun deserialize_or_abort_bls12381_fr(value: &vector<u8>): Element<Fr> {

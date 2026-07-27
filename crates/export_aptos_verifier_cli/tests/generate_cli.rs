@@ -602,5 +602,51 @@ fn proof_data_prints_snippets_matching_generated_aptos_tests() {
     assert!(stdout.contains("fun proof_b_bytes(): vector<u8>"));
     assert!(stdout.contains("fun proof_c_bytes(): vector<u8>"));
     assert!(stdout.contains("fun public_inputs_bytes(): vector<vector<u8>>"));
+    let generated_tests = generated_tests.replace("\r\n", "\n");
+    let stdout = stdout.replace("\r\n", "\n");
     assert!(generated_tests.contains(stdout.trim()));
+}
+
+#[test]
+fn framework_revision_override_requires_and_records_a_full_sha() {
+    let repo = repo_root();
+    let bundle = repo
+        .join("examples")
+        .join("ark-mimc")
+        .join("artifacts")
+        .join("bn254")
+        .join("groth16_artifacts.json");
+    let out_dir = temp_output_dir("framework_revision_override");
+    let revision = "0123456789abcdef0123456789abcdef01234567";
+
+    let invalid_out = temp_output_dir("invalid_framework_revision");
+    Command::cargo_bin("export-aptos-verifier")
+        .unwrap()
+        .args([
+            "--bundle",
+            bundle.to_str().unwrap(),
+            "--out",
+            out_dir.to_str().unwrap(),
+            "--aptos-framework-rev",
+            revision,
+            "--force",
+        ])
+        .assert()
+        .success();
+    let move_toml = std::fs::read_to_string(out_dir.join("Move.toml")).unwrap();
+    assert!(move_toml.contains(&format!("rev = \"{revision}\"")));
+
+    Command::cargo_bin("export-aptos-verifier")
+        .unwrap()
+        .args([
+            "--bundle",
+            bundle.to_str().unwrap(),
+            "--out",
+            invalid_out.to_str().unwrap(),
+            "--aptos-framework-rev",
+            "mainnet",
+            "--force",
+        ])
+        .assert()
+        .failure();
 }

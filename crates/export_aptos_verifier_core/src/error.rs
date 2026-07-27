@@ -11,6 +11,8 @@ pub enum Error {
         source: std::io::Error,
         context: String,
     },
+    #[error("ERR_INPUT_TOO_LARGE: {path} is {size} bytes; maximum is {max}")]
+    InputTooLarge { path: PathBuf, size: u64, max: u64 },
     #[error("ERR_JSON_PARSE: {context}: {source}")]
     JsonParse {
         #[source]
@@ -61,6 +63,8 @@ pub enum Error {
     InvalidPackageName(String),
     #[error("ERR_INVALID_ACCOUNT_ADDRESS: {0}")]
     InvalidAccountAddress(String),
+    #[error("ERR_INVALID_APTOS_FRAMEWORK_REV: {0}")]
+    InvalidAptosFrameworkRevision(String),
     #[error("ERR_PREPARED_NOT_IMPLEMENTED: prepared mode is not implemented yet")]
     PreparedNotImplemented,
     #[error("ERR_TEMPLATE_MISSING: {0}")]
