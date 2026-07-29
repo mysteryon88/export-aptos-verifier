@@ -4,6 +4,7 @@ use export_aptos_verifier_core::curves::create_adapter;
 use export_aptos_verifier_core::formats::{load_compact_bundle, load_snarkjs_json_inputs};
 use export_aptos_verifier_core::local_verify;
 use export_aptos_verifier_core::model::Groth16VerifierInputs;
+use export_aptos_verifier_core::Error;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -79,4 +80,38 @@ fn local_verify_rejects_swapped_proof_points() {
     std::mem::swap(&mut proof.pi_a, &mut proof.pi_c);
 
     assert_local_verify("bls12_381", &inputs, false);
+}
+
+#[test]
+fn local_verify_rejects_trailing_public_inputs_at_both_boundaries() {
+    for curve in ["bn254", "bls12_381"] {
+        let mut inputs = load_ark_mimc_snarkjs(curve);
+        inputs.public_inputs.push("0".to_string());
+        let adapter = create_adapter(curve).unwrap();
+
+        let wrapped = local_verify(adapter.as_ref(), &inputs);
+        let direct = adapter.local_verify(&inputs);
+
+        assert!(matches!(wrapped, Err(Error::PublicInputCountMismatch(_))));
+        assert!(matches!(direct, Err(Error::PublicInputCountMismatch(_))));
+    }
+}
+
+#[test]
+fn local_verify_rejects_empty_ic_without_panicking_at_both_boundaries() {
+    for curve in ["bn254", "bls12_381"] {
+        let mut inputs = load_ark_mimc_snarkjs(curve);
+        inputs.verifying_key.ic.clear();
+        let adapter = create_adapter(curve).unwrap();
+
+        let wrapped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            local_verify(adapter.as_ref(), &inputs)
+        }));
+        let direct = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            adapter.local_verify(&inputs)
+        }));
+
+        assert!(matches!(wrapped, Ok(Err(Error::IcLengthMismatch(_)))));
+        assert!(matches!(direct, Ok(Err(Error::IcLengthMismatch(_)))));
+    }
 }

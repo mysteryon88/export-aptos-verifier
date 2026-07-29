@@ -12,8 +12,9 @@ use crate::curves::{create_adapter, CurveAdapter};
 use crate::error::{Error, Result};
 use crate::model::{
     CurveKind, Groth16G1Point, Groth16G2Point, Groth16Proof, Groth16VerificationKey,
-    Groth16VerifierInputs, SourceFormat,
+    Groth16VerifierInputs, SourceFormat, MAX_PUBLIC_INPUTS,
 };
+use crate::parser::{decode_hex, ensure_public_input_count, read_bounded_text};
 use crate::snarkjs::parse_decimal;
 
 const MAX_GNARK_BINARY_BYTES: u64 = 16 * 1024 * 1024;
@@ -170,6 +171,13 @@ pub fn load_gnark_json_inputs(
     curve_hint: Option<&str>,
 ) -> Result<Groth16VerifierInputs> {
     let vk: GnarkVerificationKeyJson = read_json(vk_path)?;
+    if vk.g1.k.is_empty() || vk.g1.k.len() > MAX_PUBLIC_INPUTS + 1 {
+        return Err(Error::IcLengthMismatch(format!(
+            "gnark G1.K has {} points; expected 1..={} points",
+            vk.g1.k.len(),
+            MAX_PUBLIC_INPUTS + 1
+        )));
+    }
     ensure_no_vk_commitments(&vk)?;
     let verifying_key = vk_from_json(vk)?;
     let proof = proof_path.map(load_gnark_json_proof).transpose()?;
@@ -508,12 +516,13 @@ fn load_sp1_groth16_proof(path: &Path) -> Result<Sp1Groth16Proof> {
     let _raw_proof_hex = reader.read_string("SP1 Groth16 raw proof")?;
     let _groth16_vkey_hash = reader.read_exact(32, "SP1 Groth16 vkey hash")?;
 
-    let encoded_proof = hex::decode(&encoded_proof_hex).map_err(|e| {
-        Error::HexParse(format!(
-            "SP1 Groth16 encoded proof must be hex encoded: {e}"
-        ))
-    })?;
     const SP1_GROTH16_METADATA_BYTES: usize = 96;
+    const SP1_GROTH16_PROOF_BYTES: usize = 256;
+    let encoded_proof = decode_hex(
+        &encoded_proof_hex,
+        "SP1 Groth16 encoded proof",
+        SP1_GROTH16_METADATA_BYTES + SP1_GROTH16_PROOF_BYTES,
+    )?;
     if encoded_proof.len() < SP1_GROTH16_METADATA_BYTES {
         return Err(Error::Serialization(
             "SP1 Groth16 encoded proof is shorter than its metadata prefix".to_string(),
@@ -528,8 +537,7 @@ fn load_sp1_groth16_proof(path: &Path) -> Result<Sp1Groth16Proof> {
 }
 
 fn decode_sp1_groth16_raw_proof_hex(raw_proof_hex: &str, path: &Path) -> Result<Groth16Proof> {
-    let raw_proof = hex::decode(raw_proof_hex)
-        .map_err(|e| Error::HexParse(format!("SP1 Groth16 raw proof must be hex encoded: {e}")))?;
+    let raw_proof = decode_hex(raw_proof_hex, "SP1 Groth16 raw proof", 256)?;
     decode_sp1_groth16_proof_bytes(&raw_proof, path)
 }
 
@@ -950,11 +958,14 @@ fn load_optional_public_inputs(path: Option<&Path>) -> Result<Vec<String>> {
 
 fn parse_public_inputs_value(value: &Value, field: &str) -> Result<Vec<String>> {
     match value {
-        Value::Array(values) => values
-            .iter()
-            .enumerate()
-            .map(|(idx, value)| decimal_from_value(value, &format!("{field}[{idx}]")))
-            .collect(),
+        Value::Array(values) => {
+            ensure_public_input_count(values.len(), field)?;
+            values
+                .iter()
+                .enumerate()
+                .map(|(idx, value)| decimal_from_value(value, &format!("{field}[{idx}]")))
+                .collect()
+        }
         Value::Object(map) => {
             for key in ["public_inputs", "public", "publicSignals"] {
                 if let Some(inner) = map.get(key) {
@@ -992,10 +1003,7 @@ fn decimal_from_value(value: &Value, field: &str) -> Result<String> {
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
-    let content = fs::read_to_string(path).map_err(|e| Error::Io {
-        source: e,
-        context: format!("failed to read file {}", path.display()),
-    })?;
+    let content = read_bounded_text(path)?;
     serde_json::from_str::<T>(&content).map_err(|e| Error::JsonParse {
         source: e,
         context: format!("invalid gnark json in file {}", path.display()),

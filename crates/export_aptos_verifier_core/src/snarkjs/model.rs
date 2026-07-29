@@ -4,6 +4,7 @@ use serde_json::Value;
 use std::str::FromStr;
 
 pub type DecimalValue = String;
+const MAX_DECIMAL_DIGITS: usize = 128;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct VerificationKey {
@@ -122,7 +123,10 @@ fn pair_from_value(value: &Value, field: &str) -> Result<(DecimalValue, DecimalV
 
 fn parse_scalar(value: &Value, field: &str) -> Result<String> {
     let decimal = match value {
-        Value::String(s) => return Ok(s.clone()),
+        Value::String(s) => {
+            validate_decimal(s, field)?;
+            return Ok(s.clone());
+        }
         Value::Number(n) => n.to_string(),
         _ => {
             return Err(Error::MalformedG1(format!(
@@ -131,19 +135,28 @@ fn parse_scalar(value: &Value, field: &str) -> Result<String> {
         }
     };
 
-    // reject floats or non-decimal notation.
-    if !decimal.chars().all(|c| c.is_ascii_digit()) {
-        return Err(Error::DecimalParse(format!(
-            "{field} expected decimal string, got {decimal}"
-        )));
-    }
-
+    validate_decimal(&decimal, field)?;
     Ok(decimal)
 }
 
 pub fn parse_decimal(value: &str, field: &str) -> Result<num_bigint::BigUint> {
+    validate_decimal(value, field)?;
     num_bigint::BigUint::from_str(value)
-        .map_err(|_| Error::DecimalParse(format!("{field} must be decimal integer, got {value}")))
+        .map_err(|_| Error::DecimalParse(format!("{field} must be a decimal integer")))
+}
+
+fn validate_decimal(value: &str, field: &str) -> Result<()> {
+    if value.is_empty() || value.len() > MAX_DECIMAL_DIGITS {
+        return Err(Error::DecimalParse(format!(
+            "{field} must contain 1..={MAX_DECIMAL_DIGITS} decimal digits"
+        )));
+    }
+    if !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(Error::DecimalParse(format!(
+            "{field} must be a decimal integer"
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]

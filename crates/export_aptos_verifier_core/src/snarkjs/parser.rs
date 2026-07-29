@@ -1,4 +1,9 @@
 use crate::error::{Error, Result};
+use crate::model::MAX_PUBLIC_INPUTS;
+use crate::parser::{
+    decode_hex, ensure_public_input_count, read_bounded_text, validate_arkworks_vk_encoding,
+    MAX_ARKWORKS_PROOF_BYTES,
+};
 use crate::snarkjs::model::{
     parse_decimal, PackedArtifact, Proof, RawProof, RawVerificationKey, SnarkJsG1, SnarkJsG2,
     VerificationKey,
@@ -9,20 +14,26 @@ use ark_groth16::{Proof as ArkProof, VerifyingKey as ArkVerifyingKey};
 use ark_serialize::CanonicalDeserialize;
 use num_bigint::BigUint;
 use serde_json::Value;
-use std::fs;
 use std::io::Cursor;
 use std::path::Path;
 
 pub fn parse_verification_key(path: &Path) -> Result<VerificationKey> {
     let raw = read_json(path)?;
-    let raw_vk: RawVerificationKey =
-        serde_json::from_value(raw.clone()).map_err(|e| Error::JsonParse {
-            source: e,
-            context: format!(
-                "failed to deserialize verification_key.json from {}",
-                path.display()
-            ),
-        })?;
+    let raw_vk: RawVerificationKey = serde_json::from_value(raw).map_err(|e| Error::JsonParse {
+        source: e,
+        context: format!(
+            "failed to deserialize verification_key.json from {}",
+            path.display()
+        ),
+    })?;
+    ensure_public_input_count(raw_vk.n_public, "nPublic")?;
+    if raw_vk.ic.len() > MAX_PUBLIC_INPUTS + 1 {
+        return Err(Error::IcLengthMismatch(format!(
+            "IC has {} points; maximum is {}",
+            raw_vk.ic.len(),
+            MAX_PUBLIC_INPUTS + 1
+        )));
+    }
 
     let vk_alpha_1 = parse_vk_alpha_1(raw_vk.vk_alpha_1.clone())?;
     let vk_beta_2 = SnarkJsG2::from_value(raw_vk.vk_beta_2, "vk_beta_2")?;
@@ -69,6 +80,7 @@ pub fn parse_public_inputs(path: &Path) -> Result<Vec<String>> {
         source: e,
         context: format!("expected public.json to be array at {}", path.display()),
     })?;
+    ensure_public_input_count(array.len(), "public inputs")?;
 
     array
         .iter()
@@ -153,10 +165,7 @@ fn parse_vk_alpha_1(v: Value) -> Result<SnarkJsG1> {
 }
 
 fn read_json(path: &Path) -> Result<Value> {
-    let content = fs::read_to_string(path).map_err(|e| Error::Io {
-        source: e,
-        context: format!("failed to read file {}", path.display()),
-    })?;
+    let content = read_bounded_text(path)?;
     serde_json::from_str::<Value>(&content).map_err(|e| Error::JsonParse {
         source: e,
         context: format!("invalid json in file {}", path.display()),
@@ -175,6 +184,18 @@ impl CurveChoice {
             Self::Bn254 => "bn254",
             Self::Bls12381 => "bls12381",
         }
+    }
+
+    fn vk_encoding(&self) -> (usize, usize) {
+        match self {
+            Self::Bn254 => (224, 32),
+            Self::Bls12381 => (336, 48),
+        }
+    }
+
+    fn max_vk_bytes(&self) -> usize {
+        let (fixed, g1) = self.vk_encoding();
+        fixed + 8 + (MAX_PUBLIC_INPUTS + 1) * g1
     }
 }
 
@@ -238,7 +259,10 @@ fn parse_bn254_vk(vk_hex: &str) -> Result<VerificationKey> {
 }
 
 fn decode_verifying_key_bn254(vk_hex: &str) -> Result<ArkVerifyingKey<Bn254>> {
-    let bytes = decode_hex(vk_hex, "vk")?;
+    let curve = CurveChoice::Bn254;
+    let bytes = decode_hex(vk_hex, "vk", curve.max_vk_bytes())?;
+    let (fixed, g1) = curve.vk_encoding();
+    validate_arkworks_vk_encoding(&bytes, fixed, g1, "BN254 verifying key")?;
     let mut cursor = Cursor::new(bytes);
     let vk = ArkVerifyingKey::<Bn254>::deserialize_compressed(&mut cursor).map_err(|e| {
         Error::Serialization(format!(
@@ -261,7 +285,7 @@ fn parse_bn254_proof(proof_hex: &str) -> Result<Proof> {
 }
 
 fn decode_proof_bn254(proof_hex: &str) -> Result<ArkProof<Bn254>> {
-    let bytes = decode_hex(proof_hex, "proof")?;
+    let bytes = decode_hex(proof_hex, "proof", MAX_ARKWORKS_PROOF_BYTES)?;
     let mut cursor = Cursor::new(bytes);
     let proof = ArkProof::deserialize_compressed(&mut cursor).map_err(|e| {
         Error::Serialization(format!("failed to deserialize BN254 proof from hex: {e:?}"))
@@ -297,7 +321,10 @@ fn parse_bls_vk(vk_hex: &str) -> Result<VerificationKey> {
 }
 
 fn decode_verifying_key_bls(vk_hex: &str) -> Result<ArkVerifyingKey<Bls12_381>> {
-    let bytes = decode_hex(vk_hex, "vk")?;
+    let curve = CurveChoice::Bls12381;
+    let bytes = decode_hex(vk_hex, "vk", curve.max_vk_bytes())?;
+    let (fixed, g1) = curve.vk_encoding();
+    validate_arkworks_vk_encoding(&bytes, fixed, g1, "BLS12-381 verifying key")?;
     let mut cursor = Cursor::new(bytes);
     let vk = ArkVerifyingKey::<Bls12_381>::deserialize_compressed(&mut cursor).map_err(|e| {
         Error::Serialization(format!(
@@ -320,7 +347,7 @@ fn parse_bls_proof(proof_hex: &str) -> Result<Proof> {
 }
 
 fn decode_proof_bls(proof_hex: &str) -> Result<ArkProof<Bls12_381>> {
-    let bytes = decode_hex(proof_hex, "proof")?;
+    let bytes = decode_hex(proof_hex, "proof", MAX_ARKWORKS_PROOF_BYTES)?;
     let mut cursor = Cursor::new(bytes);
     let proof = ArkProof::deserialize_compressed(&mut cursor).map_err(|e| {
         Error::Serialization(format!(
@@ -393,11 +420,14 @@ fn parse_public_input(value: Option<Value>, field_name: &str) -> Result<Vec<Stri
     })?;
 
     match value {
-        Value::Array(values) => values
-            .iter()
-            .enumerate()
-            .map(|(idx, item)| parse_public_input_value(item, &format!("{field_name}[{idx}]")))
-            .collect(),
+        Value::Array(values) => {
+            ensure_public_input_count(values.len(), field_name)?;
+            values
+                .iter()
+                .enumerate()
+                .map(|(idx, item)| parse_public_input_value(item, &format!("{field_name}[{idx}]")))
+                .collect()
+        }
         _ => Ok(vec![parse_public_input_value(&value, field_name)?]),
     }
 }
@@ -423,6 +453,11 @@ fn parse_compact_scalar(raw: &str, field_name: &str) -> Result<String> {
     let has_hex_prefix = raw.starts_with("0x") || raw.starts_with("0X");
     let value = if has_hex_prefix { &raw[2..] } else { raw };
     if has_hex_prefix {
+        if value.len() > 64 {
+            return Err(Error::DecimalParse(format!(
+                "{field_name} exceeds 32-byte scalar limit"
+            )));
+        }
         if value.chars().all(|c| c.is_ascii_hexdigit()) {
             let value = BigUint::parse_bytes(value.as_bytes(), 16)
                 .ok_or_else(|| {
@@ -441,7 +476,7 @@ fn parse_compact_scalar(raw: &str, field_name: &str) -> Result<String> {
         return Ok(value.to_string());
     }
     if value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()) {
-        let bytes = hex::decode(value).map_err(|e| {
+        let bytes = decode_hex(value, field_name, 32).map_err(|e| {
             Error::DecimalParse(format!(
                 "{field_name} could not parse serialized scalar bytes {raw}: {e}"
             ))
@@ -449,6 +484,11 @@ fn parse_compact_scalar(raw: &str, field_name: &str) -> Result<String> {
         return Ok(BigUint::from_bytes_le(&bytes).to_string());
     }
     if value.chars().all(|c| c.is_ascii_hexdigit()) {
+        if value.len() > 64 {
+            return Err(Error::DecimalParse(format!(
+                "{field_name} exceeds 32-byte scalar limit"
+            )));
+        }
         let value = BigUint::parse_bytes(value.as_bytes(), 16)
             .ok_or_else(|| {
                 Error::DecimalParse(format!("{field_name} could not parse hex scalar {raw}"))
@@ -459,19 +499,4 @@ fn parse_compact_scalar(raw: &str, field_name: &str) -> Result<String> {
     Err(Error::DecimalParse(format!(
         "{field_name} must be decimal or hex string"
     )))
-}
-
-fn decode_hex(raw: &str, field: &str) -> Result<Vec<u8>> {
-    let hex = raw.trim().trim_start_matches("0x").trim_start_matches("0X");
-    if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(Error::HexParse(format!(
-            "{field} must be a hex string, got {raw}"
-        )));
-    }
-    if !hex.len().is_multiple_of(2) {
-        return Err(Error::HexParse(format!(
-            "{field} has odd hex length, got {hex}"
-        )));
-    }
-    hex::decode(hex).map_err(|e| Error::HexParse(format!("{field}: {e}")))
 }

@@ -10,6 +10,7 @@ use export_aptos_verifier_core::error::Error;
 use export_aptos_verifier_core::snarkjs::{
     parse_proof, parse_public_inputs, parse_verification_key,
 };
+use tempfile::NamedTempFile;
 
 fn tmp(path: &str) -> PathBuf {
     let mut p = env::temp_dir();
@@ -84,4 +85,34 @@ fn bls12381_public_input_field_overflow_rejected() {
     let overflow = BlsFr::MODULUS.to_string();
     let err = adapter.serialize_fr_public_input(&overflow).unwrap_err();
     assert!(matches!(err, Error::FieldOverflow(_)));
+}
+
+#[test]
+fn oversized_json_is_rejected_before_parsing() {
+    let file = NamedTempFile::new().unwrap();
+    file.as_file().set_len(16 * 1024 * 1024 + 1).unwrap();
+
+    let err = parse_proof(file.path()).unwrap_err();
+
+    assert!(matches!(err, Error::InputTooLarge { .. }));
+}
+
+#[test]
+fn oversized_decimal_is_rejected_before_biguint_parsing() {
+    let file = NamedTempFile::new().unwrap();
+    write(file.path(), format!(r#"["{}"]"#, "9".repeat(129))).unwrap();
+
+    let err = parse_public_inputs(file.path()).unwrap_err();
+
+    assert!(matches!(err, Error::DecimalParse(_)));
+}
+
+#[test]
+fn oversized_public_input_array_is_rejected_before_scalar_conversion() {
+    let file = NamedTempFile::new().unwrap();
+    write(file.path(), format!("[{}]", "0,".repeat(65_536) + "0")).unwrap();
+
+    let err = parse_public_inputs(file.path()).unwrap_err();
+
+    assert!(matches!(err, Error::PublicInputCountMismatch(_)));
 }

@@ -6,7 +6,8 @@ use export_aptos_verifier_core::formats::{
     load_gnark_binary_inputs_auto, load_gnark_json_inputs, load_snarkjs_json_inputs,
     load_sp1_groth16_inputs,
 };
-use export_aptos_verifier_core::SourceFormat;
+use export_aptos_verifier_core::{Error, SourceFormat};
+use tempfile::NamedTempFile;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -216,4 +217,62 @@ fn sp1_groth16_v6_wrapper_inputs_load() {
     assert_eq!(inputs.source_format, SourceFormat::Sp1Groth16);
     assert!(inputs.has_test_vectors());
     assert_eq!(inputs.public_inputs.len(), 5);
+}
+
+#[test]
+fn compact_proof_hex_is_bounded_before_decoding() {
+    let source = repo_root()
+        .join("examples")
+        .join("ark-mimc")
+        .join("artifacts")
+        .join("bn254")
+        .join("groth16_artifacts.json");
+    let mut bundle: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(source).unwrap()).unwrap();
+    bundle["proof"] = serde_json::Value::String("00".repeat(1025));
+
+    let input_dir = temp_output_dir("oversized_compact_proof");
+    fs::create_dir_all(&input_dir).unwrap();
+    let path = input_dir.join("groth16_artifacts.json");
+    fs::write(&path, bundle.to_string()).unwrap();
+
+    let err = load_compact_bundle(&path, None).unwrap_err();
+
+    assert!(matches!(err, Error::HexParse(_)));
+}
+
+#[test]
+fn public_json_loaders_reject_oversized_artifacts_before_parsing() {
+    let file = NamedTempFile::new().unwrap();
+    file.as_file().set_len(16 * 1024 * 1024 + 1).unwrap();
+
+    let gnark = load_gnark_json_inputs(file.path(), None, None, None);
+    let arkworks = load_arkworks_inputs(file.path(), None, None, Some("bn254"));
+
+    assert!(matches!(gnark, Err(Error::InputTooLarge { .. })));
+    assert!(matches!(arkworks, Err(Error::InputTooLarge { .. })));
+}
+
+#[test]
+fn compact_vk_declared_ic_count_is_bounded_before_arkworks_allocation() {
+    let source = repo_root()
+        .join("examples")
+        .join("ark-mimc")
+        .join("artifacts")
+        .join("bn254")
+        .join("groth16_artifacts.json");
+    let mut bundle: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(source).unwrap()).unwrap();
+    let mut vk = hex::decode(bundle["vk"].as_str().unwrap()).unwrap();
+    vk[224..232].copy_from_slice(&65_538u64.to_le_bytes());
+    bundle["vk"] = serde_json::Value::String(hex::encode(vk));
+
+    let input_dir = temp_output_dir("oversized_compact_ic");
+    fs::create_dir_all(&input_dir).unwrap();
+    let path = input_dir.join("groth16_artifacts.json");
+    fs::write(&path, bundle.to_string()).unwrap();
+
+    let err = load_compact_bundle(&path, None).unwrap_err();
+
+    assert!(matches!(err, Error::IcLengthMismatch(_)));
 }

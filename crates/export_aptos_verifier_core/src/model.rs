@@ -6,6 +6,7 @@ use crate::snarkjs::{
 };
 
 pub type DecimalValue = String;
+pub(crate) const MAX_PUBLIC_INPUTS: usize = 65_536;
 
 pub(crate) fn expected_ic_len(n_public: usize) -> Result<usize> {
     n_public.checked_add(1).ok_or_else(|| {
@@ -14,6 +15,11 @@ pub(crate) fn expected_ic_len(n_public: usize) -> Result<usize> {
 }
 
 fn validate_vk_shape(n_public: usize, ic_len: usize) -> Result<()> {
+    if n_public > MAX_PUBLIC_INPUTS {
+        return Err(Error::PublicInputCountMismatch(format!(
+            "nPublic is {n_public}; maximum is {MAX_PUBLIC_INPUTS}"
+        )));
+    }
     let expected = expected_ic_len(n_public)?;
     if ic_len != expected {
         return Err(Error::IcLengthMismatch(format!(

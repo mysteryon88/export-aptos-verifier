@@ -4,14 +4,17 @@ use ark_groth16::{Proof as ArkProof, VerifyingKey as ArkVerifyingKey};
 use ark_serialize::CanonicalDeserialize;
 use num_bigint::BigUint;
 use serde_json::Value;
-use std::fs;
 use std::io::Cursor;
 use std::path::Path;
 
 use crate::error::{Error, Result};
 use crate::model::{
     CurveKind, Groth16G1Point, Groth16G2Point, Groth16Proof, Groth16VerificationKey,
-    Groth16VerifierInputs, SourceFormat,
+    Groth16VerifierInputs, SourceFormat, MAX_PUBLIC_INPUTS,
+};
+use crate::parser::{
+    decode_hex, ensure_public_input_count, read_bounded_text, validate_arkworks_vk_encoding,
+    MAX_ARKWORKS_PROOF_BYTES,
 };
 use crate::snarkjs::parse_decimal;
 
@@ -82,10 +85,7 @@ pub fn load_arkworks_inputs(
 }
 
 fn read_json_or_string(path: &Path) -> Result<Value> {
-    let content = fs::read_to_string(path).map_err(|e| Error::Io {
-        source: e,
-        context: format!("failed to read file {}", path.display()),
-    })?;
+    let content = read_bounded_text(path)?;
     let trimmed = content.trim();
     match serde_json::from_str::<Value>(trimmed) {
         Ok(value) => Ok(value),
@@ -136,7 +136,8 @@ fn decode_proof(curve: &CurveKind, raw: &str) -> Result<Groth16Proof> {
 }
 
 fn decode_vk_bn254(raw: &str) -> Result<Groth16VerificationKey> {
-    let bytes = decode_hex(raw, "vk")?;
+    let bytes = decode_hex(raw, "vk", max_vk_bytes(CurveKind::Bn254))?;
+    validate_arkworks_vk_encoding(&bytes, 224, 32, "BN254 verifying key")?;
     let mut cursor = Cursor::new(bytes);
     let vk = ArkVerifyingKey::<Bn254>::deserialize_compressed(&mut cursor).map_err(|e| {
         Error::Serialization(format!("failed to deserialize BN254 verifying key: {e:?}"))
@@ -153,7 +154,7 @@ fn decode_vk_bn254(raw: &str) -> Result<Groth16VerificationKey> {
 }
 
 fn decode_proof_bn254(raw: &str) -> Result<Groth16Proof> {
-    let bytes = decode_hex(raw, "proof")?;
+    let bytes = decode_hex(raw, "proof", MAX_ARKWORKS_PROOF_BYTES)?;
     let mut cursor = Cursor::new(bytes);
     let proof = ArkProof::<Bn254>::deserialize_compressed(&mut cursor)
         .map_err(|e| Error::Serialization(format!("failed to deserialize BN254 proof: {e:?}")))?;
@@ -166,7 +167,8 @@ fn decode_proof_bn254(raw: &str) -> Result<Groth16Proof> {
 }
 
 fn decode_vk_bls12381(raw: &str) -> Result<Groth16VerificationKey> {
-    let bytes = decode_hex(raw, "vk")?;
+    let bytes = decode_hex(raw, "vk", max_vk_bytes(CurveKind::Bls12_381))?;
+    validate_arkworks_vk_encoding(&bytes, 336, 48, "BLS12-381 verifying key")?;
     let mut cursor = Cursor::new(bytes);
     let vk = ArkVerifyingKey::<Bls12_381>::deserialize_compressed(&mut cursor).map_err(|e| {
         Error::Serialization(format!(
@@ -185,7 +187,7 @@ fn decode_vk_bls12381(raw: &str) -> Result<Groth16VerificationKey> {
 }
 
 fn decode_proof_bls12381(raw: &str) -> Result<Groth16Proof> {
-    let bytes = decode_hex(raw, "proof")?;
+    let bytes = decode_hex(raw, "proof", MAX_ARKWORKS_PROOF_BYTES)?;
     let mut cursor = Cursor::new(bytes);
     let proof = ArkProof::<Bls12_381>::deserialize_compressed(&mut cursor).map_err(|e| {
         Error::Serialization(format!("failed to deserialize BLS12-381 proof: {e:?}"))
@@ -254,11 +256,16 @@ fn point_from_bls_g2(point: &BlsG2Affine) -> Groth16G2Point {
 
 fn parse_public_inputs(value: &Value) -> Result<Vec<String>> {
     match value {
-        Value::Array(values) => values
-            .iter()
-            .enumerate()
-            .map(|(idx, value)| parse_public_input_value(value, &format!("public_inputs[{idx}]")))
-            .collect(),
+        Value::Array(values) => {
+            ensure_public_input_count(values.len(), "public inputs")?;
+            values
+                .iter()
+                .enumerate()
+                .map(|(idx, value)| {
+                    parse_public_input_value(value, &format!("public_inputs[{idx}]"))
+                })
+                .collect()
+        }
         Value::Object(_) => {
             match optional_value_from_keys(value, &["public_input", "public_inputs"]) {
                 Some(inner) => parse_public_inputs(inner),
@@ -296,7 +303,7 @@ fn parse_public_input_string(raw: &str, field_name: &str) -> Result<String> {
         && without_prefix.len().is_multiple_of(64)
         && without_prefix.chars().all(|c| c.is_ascii_hexdigit())
     {
-        let bytes = decode_hex(without_prefix, field_name)?;
+        let bytes = decode_hex(without_prefix, field_name, 32)?;
         if bytes.len() == 32 {
             return Ok(BigUint::from_bytes_le(&bytes).to_string());
         }
@@ -316,6 +323,11 @@ fn parse_scalar(raw: &str, field_name: &str) -> Result<String> {
         return Ok(value.to_string());
     }
     if value.chars().all(|c| c.is_ascii_hexdigit()) {
+        if value.len() > 64 {
+            return Err(Error::DecimalParse(format!(
+                "{field_name} exceeds 32-byte scalar limit"
+            )));
+        }
         let parsed = BigUint::parse_bytes(value.as_bytes(), 16).ok_or_else(|| {
             Error::DecimalParse(format!("{field_name} could not parse hex scalar {raw}"))
         })?;
@@ -326,20 +338,9 @@ fn parse_scalar(raw: &str, field_name: &str) -> Result<String> {
     )))
 }
 
-fn decode_hex(raw: &str, field: &str) -> Result<Vec<u8>> {
-    let hex = raw.trim().trim_start_matches("0x").trim_start_matches("0X");
-    if hex.is_empty() {
-        return Err(Error::HexParse(format!("{field} must not be empty")));
+fn max_vk_bytes(curve: CurveKind) -> usize {
+    match curve {
+        CurveKind::Bn254 => 224 + 8 + (MAX_PUBLIC_INPUTS + 1) * 32,
+        CurveKind::Bls12_381 => 336 + 8 + (MAX_PUBLIC_INPUTS + 1) * 48,
     }
-    if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(Error::HexParse(format!(
-            "{field} must be a hex string, got {raw}"
-        )));
-    }
-    if !hex.len().is_multiple_of(2) {
-        return Err(Error::HexParse(format!(
-            "{field} has odd hex length, got {hex}"
-        )));
-    }
-    hex::decode(hex).map_err(|e| Error::HexParse(format!("{field}: {e}")))
 }
