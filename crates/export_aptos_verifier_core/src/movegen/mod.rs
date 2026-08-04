@@ -95,6 +95,7 @@ pub fn generate_move_package_with_framework_rev(
     aptos_framework_rev: &str,
 ) -> Result<()> {
     ensure_adapter_matches_inputs(adapter, inputs)?;
+    validate_move_names(options.package_name, options.module_name)?;
     validate_account_address(options.account_address)?;
     validate_aptos_framework_rev(aptos_framework_rev)?;
     if options.force {
@@ -464,6 +465,28 @@ fn validate_aptos_framework_rev(value: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn validate_move_names(package_name: &str, module_name: &str) -> Result<()> {
+    if !is_move_identifier(package_name) {
+        return Err(Error::InvalidPackageName(
+            "package_name must match [A-Za-z_][A-Za-z0-9_]*".to_string(),
+        ));
+    }
+    if !is_move_identifier(module_name) {
+        return Err(Error::InvalidModuleName(
+            "module_name must match [A-Za-z_][A-Za-z0-9_]*".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn is_move_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    chars
+        .next()
+        .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
 }
 
 fn validate_account_address(value: &str) -> Result<()> {

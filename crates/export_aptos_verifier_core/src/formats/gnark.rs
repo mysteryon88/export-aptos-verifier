@@ -449,9 +449,9 @@ fn load_gnark_binary_vk(path: &Path, curve: CurveKind) -> Result<Groth16Verifica
 
 fn validate_gnark_ic_len(ic_len: usize, remaining: usize, minimum_point_size: usize) -> Result<()> {
     let max_for_bytes = remaining / minimum_point_size;
-    if ic_len == 0 || ic_len > max_for_bytes {
+    if ic_len == 0 || ic_len > MAX_PUBLIC_INPUTS + 1 || ic_len > max_for_bytes {
         return Err(Error::IcLengthMismatch(format!(
-            "gnark G1.K length {ic_len} is impossible for {remaining} remaining bytes"
+            "gnark G1.K length {ic_len} is invalid for {remaining} remaining bytes"
         )));
     }
     Ok(())
@@ -1051,11 +1051,13 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::{read_bytes, validate_gnark_ic_len};
+    use crate::model::MAX_PUBLIC_INPUTS;
     use std::fs::File;
 
     #[test]
     fn rejects_gnark_ic_lengths_before_untrusted_allocation() {
         assert!(validate_gnark_ic_len(u32::MAX as usize, 64, 32).is_err());
+        assert!(validate_gnark_ic_len(MAX_PUBLIC_INPUTS + 2, usize::MAX, 32).is_err());
         assert!(validate_gnark_ic_len(4, 96, 32).is_err());
         assert!(validate_gnark_ic_len(3, 96, 32).is_ok());
     }
