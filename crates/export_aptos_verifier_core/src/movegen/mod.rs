@@ -10,6 +10,7 @@ use handlebars::Handlebars;
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fs::{self, create_dir_all, write};
+use std::io::Read;
 use std::path::{Component, Path};
 use tempfile::{Builder as TempDirBuilder, TempDir};
 
@@ -24,6 +25,9 @@ pub struct GenerateMovePackageOptions<'a> {
 
 /// Aptos Framework revision shipped with Aptos CLI 9.4.0.
 pub const DEFAULT_APTOS_FRAMEWORK_REV: &str = "7f900aa660b13bb674924f279f1fd7d55e0cf79e";
+const MANIFEST_FILE_NAME: &str = "verifier-manifest.json";
+const MANIFEST_SCHEMA: &str = "groth16-verifier-manifest-v1";
+const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProofDataSnippet {
@@ -244,11 +248,11 @@ pub fn generate_move_package_with_framework_rev(
     }
     write_generated(staged_out.join("README.md"), generated_readme, "README.md")?;
     write_generated(
-        staged_out.join("verifier-manifest.json"),
+        staged_out.join(MANIFEST_FILE_NAME),
         format!("{manifest}\n"),
-        "verifier-manifest.json",
+        MANIFEST_FILE_NAME,
     )?;
-    publish_staged_directory(staging, &staged_out, out_dir)?;
+    publish_staged_directory(staging, &staged_out, out_dir, options.force)?;
 
     Ok(())
 }
@@ -271,24 +275,56 @@ fn create_staging_directory(out_dir: &Path) -> Result<TempDir> {
         })
 }
 
-fn publish_staged_directory(staging: TempDir, staged_out: &Path, out_dir: &Path) -> Result<()> {
+fn publish_staged_directory(
+    staging: TempDir,
+    staged_out: &Path,
+    out_dir: &Path,
+    force: bool,
+) -> Result<()> {
     let backup = staging.path().join("previous-output");
-    let had_existing = out_dir.exists();
-    if had_existing {
-        fs::rename(out_dir, &backup).map_err(|e| Error::Io {
-            source: e,
-            context: format!("stage existing output {}", out_dir.display()),
-        })?;
-    }
+    let had_existing = if force {
+        match fs::rename(out_dir, &backup) {
+            Ok(()) => {
+                if validate_safe_force_output_dir(&backup).is_err() {
+                    return restore_previous_output_or_preserve(
+                        staging,
+                        &backup,
+                        out_dir,
+                        Error::UnsafeOutputDirectory(out_dir.to_path_buf()),
+                    );
+                }
+                true
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(source) => {
+                return Err(Error::Io {
+                    source,
+                    context: format!("stage existing output {}", out_dir.display()),
+                });
+            }
+        }
+    } else {
+        match fs::symlink_metadata(out_dir) {
+            Ok(_) => return Err(Error::OutputExists(out_dir.to_path_buf())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(source) => {
+                return Err(Error::Io {
+                    source,
+                    context: format!("inspect output dir {}", out_dir.display()),
+                });
+            }
+        }
+    };
 
     if let Err(publish_error) = fs::rename(staged_out, out_dir) {
-        if had_existing {
-            return restore_previous_output_or_preserve(staging, &backup, out_dir, publish_error);
-        }
-        return Err(Error::Io {
+        let failure = Error::Io {
             source: publish_error,
             context: format!("publish generated output {}", out_dir.display()),
-        });
+        };
+        if had_existing {
+            return restore_previous_output_or_preserve(staging, &backup, out_dir, failure);
+        }
+        return Err(failure);
     }
     Ok(())
 }
@@ -297,19 +333,16 @@ fn restore_previous_output_or_preserve(
     staging: TempDir,
     backup: &Path,
     out_dir: &Path,
-    publish_error: std::io::Error,
+    failure: Error,
 ) -> Result<()> {
     match fs::rename(backup, out_dir) {
-        Ok(()) => Err(Error::Io {
-            source: publish_error,
-            context: format!("publish generated output {}", out_dir.display()),
-        }),
+        Ok(()) => Err(failure),
         Err(rollback_error) => {
             let preserved = staging.keep().join("previous-output");
             Err(Error::Io {
                 source: rollback_error,
                 context: format!(
-                    "restore {} after publish failed ({publish_error}); previous output preserved at {}",
+                    "restore {} after generation failed ({failure}); previous output preserved at {}",
                     out_dir.display(),
                     preserved.display()
                 ),
@@ -415,7 +448,7 @@ fn render_manifest(
     fingerprint: &[u8; 32],
 ) -> Result<String> {
     serde_json::to_string_pretty(&serde_json::json!({
-        "schema": "groth16-verifier-manifest-v1",
+        "schema": MANIFEST_SCHEMA,
         "generator": {
             "name": env!("CARGO_PKG_NAME"),
             "version": env!("CARGO_PKG_VERSION"),
@@ -514,8 +547,18 @@ fn validate_safe_force_output_dir(out_dir: &Path) -> Result<()> {
         return Err(Error::UnsafeOutputDirectory(out_dir.to_path_buf()));
     }
 
-    if !out_dir.exists() {
-        return Ok(());
+    let metadata = match fs::symlink_metadata(out_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(Error::Io {
+                source,
+                context: format!("inspect output dir {}", out_dir.display()),
+            });
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(Error::UnsafeOutputDirectory(out_dir.to_path_buf()));
     }
 
     let target = out_dir.canonicalize().map_err(|e| Error::Io {
@@ -538,7 +581,52 @@ fn validate_safe_force_output_dir(out_dir: &Path) -> Result<()> {
         return Err(Error::UnsafeOutputDirectory(target));
     }
 
-    Ok(())
+    let mut entries = fs::read_dir(out_dir).map_err(|source| Error::Io {
+        source,
+        context: format!("read output dir {}", out_dir.display()),
+    })?;
+    match entries.next() {
+        None => Ok(()),
+        Some(Err(source)) => Err(Error::Io {
+            source,
+            context: format!("read output dir {}", out_dir.display()),
+        }),
+        Some(Ok(_)) if generated_output_manifest_is_valid(out_dir) => Ok(()),
+        Some(Ok(_)) => Err(Error::UnsafeOutputDirectory(out_dir.to_path_buf())),
+    }
+}
+
+fn generated_output_manifest_is_valid(out_dir: &Path) -> bool {
+    let manifest = out_dir.join(MANIFEST_FILE_NAME);
+    let Ok(metadata) = fs::symlink_metadata(&manifest) else {
+        return false;
+    };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_MANIFEST_BYTES
+    {
+        return false;
+    }
+    let Ok(file) = fs::File::open(manifest) else {
+        return false;
+    };
+    let mut contents = String::new();
+    if file
+        .take(MAX_MANIFEST_BYTES + 1)
+        .read_to_string(&mut contents)
+        .is_err()
+        || contents.len() > MAX_MANIFEST_BYTES as usize
+    {
+        return false;
+    }
+    let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return false;
+    };
+    manifest["schema"] == MANIFEST_SCHEMA
+        && manifest["generator"]["name"] == env!("CARGO_PKG_NAME")
+        && manifest["generator"]["version"]
+            .as_str()
+            .is_some_and(|version| !version.is_empty())
 }
 
 fn register_templates(handlebars: &mut Handlebars) -> Result<()> {
@@ -564,7 +652,10 @@ fn register_templates(handlebars: &mut Handlebars) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{create_staging_directory, publish_staged_directory};
+    use super::{
+        create_staging_directory, publish_staged_directory, Error, MANIFEST_FILE_NAME,
+        MANIFEST_SCHEMA,
+    };
     use std::fs;
 
     #[test]
@@ -573,10 +664,38 @@ mod tests {
         let out = parent.path().join("generated");
         fs::create_dir(&out).unwrap();
         fs::write(out.join("keep.txt"), "existing output").unwrap();
+        fs::write(
+            out.join(MANIFEST_FILE_NAME),
+            format!(
+                r#"{{"schema":"{MANIFEST_SCHEMA}","generator":{{"name":"{}","version":"0.1.0"}}}}"#,
+                env!("CARGO_PKG_NAME")
+            ),
+        )
+        .unwrap();
         let staging = create_staging_directory(&out).unwrap();
         let missing_staged_output = staging.path().join("missing");
 
-        assert!(publish_staged_directory(staging, &missing_staged_output, &out).is_err());
+        assert!(publish_staged_directory(staging, &missing_staged_output, &out, true).is_err());
+        assert_eq!(
+            fs::read_to_string(out.join("keep.txt")).unwrap(),
+            "existing output"
+        );
+    }
+
+    #[test]
+    fn non_force_publish_never_moves_existing_output() {
+        let parent = tempfile::tempdir().unwrap();
+        let out = parent.path().join("generated");
+        fs::create_dir(&out).unwrap();
+        fs::write(out.join("keep.txt"), "existing output").unwrap();
+        let staging = create_staging_directory(&out).unwrap();
+        let staged_out = staging.path().join("output");
+        fs::create_dir(&staged_out).unwrap();
+
+        assert!(matches!(
+            publish_staged_directory(staging, &staged_out, &out, false),
+            Err(Error::OutputExists(_))
+        ));
         assert_eq!(
             fs::read_to_string(out.join("keep.txt")).unwrap(),
             "existing output"
@@ -599,7 +718,10 @@ mod tests {
             staging,
             &backup,
             &out,
-            std::io::Error::other("publish failed"),
+            Error::Io {
+                source: std::io::Error::other("publish failed"),
+                context: "publish generated output".to_string(),
+            },
         )
         .unwrap_err();
         assert!(err.to_string().contains("previous output preserved"));

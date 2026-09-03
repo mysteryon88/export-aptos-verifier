@@ -375,30 +375,120 @@ fn force_generation_validates_vk_before_replacing_existing_output() {
         .join("bn254")
         .join("groth16_artifacts.json");
     let mut inputs = load_compact_bundle(&bundle, None).unwrap();
+    let out = fresh_dir("validate_before_replace");
+    let options = GenerateMovePackageOptions {
+        package_name: "validate_before_replace",
+        module_name: "verifier",
+        account_address: "0xCAFE",
+        mode: MovegenMode::Library,
+        force: true,
+    };
+    let adapter = create_adapter("bn254").unwrap();
+    generate_move_package(&out, adapter.as_ref(), &inputs, &options).unwrap();
+    let sentinel = out.join("keep.txt");
+    fs::write(&sentinel, "existing output").unwrap();
+
     inputs.verifying_key.vk_alpha_1 = Groth16G1Point {
         x: "1".to_string(),
         y: "1".to_string(),
         z: "1".to_string(),
     };
-    let out = fresh_dir("validate_before_replace");
-    let sentinel = out.join("keep.txt");
-    fs::write(&sentinel, "existing output").unwrap();
 
-    let result = generate_move_package(
-        &out,
-        create_adapter("bn254").unwrap().as_ref(),
-        &inputs,
-        &GenerateMovePackageOptions {
-            package_name: "validate_before_replace",
-            module_name: "verifier",
-            account_address: "0xCAFE",
-            mode: MovegenMode::Library,
-            force: true,
-        },
-    );
+    let result = generate_move_package(&out, adapter.as_ref(), &inputs, &options);
 
     assert!(result.is_err());
     assert_eq!(fs::read_to_string(sentinel).unwrap(), "existing output");
+}
+
+#[test]
+fn force_generation_rejects_unowned_existing_outputs() {
+    let bundle = repo_root()
+        .join("examples")
+        .join("ark-mimc")
+        .join("artifacts")
+        .join("bn254")
+        .join("groth16_artifacts.json");
+    let inputs = load_compact_bundle(&bundle, None).unwrap();
+    let adapter = create_adapter("bn254").unwrap();
+    let base = fresh_dir("reject_unowned_force_output");
+    let directory = base.join("directory");
+    fs::create_dir_all(&directory).unwrap();
+    let directory_sentinel = directory.join("keep.txt");
+    fs::write(&directory_sentinel, "directory content").unwrap();
+    let file = base.join("file");
+    fs::write(&file, "file content").unwrap();
+    let oversized = base.join("oversized_manifest");
+    fs::create_dir(&oversized).unwrap();
+    let oversized_sentinel = oversized.join("keep.txt");
+    fs::write(&oversized_sentinel, "oversized manifest content").unwrap();
+    fs::write(
+        oversized.join("verifier-manifest.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema": "groth16-verifier-manifest-v1",
+            "generator": {
+                "name": env!("CARGO_PKG_NAME"),
+                "version": "0.1.0"
+            },
+            "padding": "x".repeat(64 * 1024)
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let options = GenerateMovePackageOptions {
+        package_name: "reject_unowned_force_output",
+        module_name: "verifier",
+        account_address: "0xCAFE",
+        mode: MovegenMode::Library,
+        force: true,
+    };
+
+    for out in [&directory, &file, &oversized] {
+        let err = generate_move_package(out, adapter.as_ref(), &inputs, &options).unwrap_err();
+        assert!(matches!(err, Error::UnsafeOutputDirectory(_)));
+    }
+
+    assert_eq!(
+        fs::read_to_string(directory_sentinel).unwrap(),
+        "directory content"
+    );
+    assert_eq!(fs::read_to_string(file).unwrap(), "file content");
+    assert_eq!(
+        fs::read_to_string(oversized_sentinel).unwrap(),
+        "oversized manifest content"
+    );
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn force_generation_allows_missing_empty_and_owned_output() {
+    let bundle = repo_root()
+        .join("examples")
+        .join("ark-mimc")
+        .join("artifacts")
+        .join("bn254")
+        .join("groth16_artifacts.json");
+    let inputs = load_compact_bundle(&bundle, None).unwrap();
+    let adapter = create_adapter("bn254").unwrap();
+    let base = fresh_dir("allow_force_output");
+    let options = GenerateMovePackageOptions {
+        package_name: "allow_force_output",
+        module_name: "verifier",
+        account_address: "0xCAFE",
+        mode: MovegenMode::Library,
+        force: true,
+    };
+
+    let missing = base.join("missing");
+    generate_move_package(&missing, adapter.as_ref(), &inputs, &options).unwrap();
+    assert!(missing.join("verifier-manifest.json").is_file());
+
+    let empty = base.join("empty");
+    fs::create_dir_all(&empty).unwrap();
+    generate_move_package(&empty, adapter.as_ref(), &inputs, &options).unwrap();
+    generate_move_package(&empty, adapter.as_ref(), &inputs, &options).unwrap();
+    assert!(empty.join("verifier-manifest.json").is_file());
+
+    fs::remove_dir_all(base).unwrap();
 }
 
 #[test]
