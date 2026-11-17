@@ -1,6 +1,5 @@
-use crate::curves::{create_adapter, CurveAdapter};
 use crate::error::{Error, Result};
-use crate::model::{Groth16VerificationKey, Groth16VerifierInputs};
+use crate::model::Groth16VerifierInputs;
 use crate::parser::arkworks;
 use std::path::Path;
 
@@ -38,7 +37,7 @@ fn infer_arkworks_curve(
     let mut errors = Vec::new();
 
     for curve in ["bn254", "bls12381"] {
-        match load(curve).and_then(validate_candidate) {
+        match load(curve) {
             Ok(inputs) => {
                 if !matches
                     .iter()
@@ -61,31 +60,4 @@ fn infer_arkworks_curve(
             "{label} are valid for more than one supported curve"
         ))),
     }
-}
-
-fn validate_candidate(inputs: Groth16VerifierInputs) -> Result<Groth16VerifierInputs> {
-    let adapter = create_adapter(inputs.curve.canonical_name())?;
-    if inputs.has_test_vectors() {
-        match adapter.local_verify(&inputs) {
-            Ok(true) => Ok(inputs),
-            Ok(false) => Err(Error::LocalProofVerificationFailed(
-                "local verification returned false".to_string(),
-            )),
-            Err(err) => Err(err),
-        }
-    } else {
-        serialize_verifying_key(adapter.as_ref(), &inputs.verifying_key)?;
-        Ok(inputs)
-    }
-}
-
-fn serialize_verifying_key(adapter: &dyn CurveAdapter, vk: &Groth16VerificationKey) -> Result<()> {
-    adapter.serialize_g1_vk(&vk.vk_alpha_1)?;
-    adapter.serialize_g2_vk(&vk.vk_beta_2)?;
-    adapter.serialize_g2_vk(&vk.vk_gamma_2)?;
-    adapter.serialize_g2_vk(&vk.vk_delta_2)?;
-    for point in &vk.ic {
-        adapter.serialize_g1_vk(point)?;
-    }
-    Ok(())
 }

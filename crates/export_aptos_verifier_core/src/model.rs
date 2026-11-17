@@ -127,7 +127,7 @@ impl Groth16VerifierInputs {
             .or_else(|| proof.protocol.clone())
             .unwrap_or_else(|| "groth16".to_string());
 
-        Ok(Self {
+        let inputs = Self {
             curve,
             protocol,
             verifying_key: Groth16VerificationKey {
@@ -145,7 +145,9 @@ impl Groth16VerifierInputs {
             }),
             public_inputs,
             source_format,
-        })
+        };
+        inputs.validate()?;
+        Ok(inputs)
     }
 
     pub fn from_legacy_vk_only(
@@ -169,7 +171,7 @@ impl Groth16VerifierInputs {
         let curve = CurveKind::from_name(&curve_name)?;
         let protocol = vk.protocol.clone().unwrap_or_else(|| "groth16".to_string());
 
-        Ok(Self {
+        let inputs = Self {
             curve,
             protocol,
             verifying_key: Groth16VerificationKey {
@@ -183,7 +185,9 @@ impl Groth16VerifierInputs {
             proof: None,
             public_inputs,
             source_format,
-        })
+        };
+        inputs.validate()?;
+        Ok(inputs)
     }
 
     pub fn from_parts(
@@ -212,14 +216,16 @@ impl Groth16VerifierInputs {
             )));
         }
 
-        Ok(Self {
+        let inputs = Self {
             curve,
             protocol: "groth16".to_string(),
             verifying_key,
             proof,
             public_inputs,
             source_format,
-        })
+        };
+        inputs.validate()?;
+        Ok(inputs)
     }
 
     pub fn has_test_vectors(&self) -> bool {
@@ -244,6 +250,23 @@ impl Groth16VerifierInputs {
                 self.verifying_key.n_public,
                 self.public_inputs.len()
             )));
+        }
+        let adapter = crate::curves::create_adapter(self.curve.canonical_name())?;
+        let vk = &self.verifying_key;
+        adapter.serialize_g1_vk(&vk.vk_alpha_1)?;
+        adapter.serialize_g2_vk(&vk.vk_beta_2)?;
+        adapter.serialize_g2_vk(&vk.vk_gamma_2)?;
+        adapter.serialize_g2_vk(&vk.vk_delta_2)?;
+        for point in &vk.ic {
+            adapter.serialize_g1_vk(point)?;
+        }
+        if let Some(proof) = &self.proof {
+            adapter.serialize_g1_proof(&proof.pi_a)?;
+            adapter.serialize_g2_proof(&proof.pi_b)?;
+            adapter.serialize_g1_proof(&proof.pi_c)?;
+        }
+        for scalar in &self.public_inputs {
+            adapter.serialize_fr_public_input(scalar)?;
         }
         Ok(())
     }

@@ -48,30 +48,19 @@ fn write_missing_curve_json_inputs(dir: &Path) -> (PathBuf, PathBuf, PathBuf) {
     let proof = dir.join("proof.json");
     let public = dir.join("public.json");
 
+    let fixtures = repo_root().join("examples/ark-mimc/artifacts/bn254");
+    for (destination, name) in [(&vk, "verification_key.json"), (&proof, "proof.json")] {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(fixtures.join(name)).unwrap()).unwrap();
+        value.as_object_mut().unwrap().remove("curve");
+        fs::write(destination, serde_json::to_vec(&value).unwrap()).unwrap();
+    }
+    let proof_json: serde_json::Value = serde_json::from_slice(&fs::read(&proof).unwrap()).unwrap();
     fs::write(
-        &vk,
-        r#"{
-            "protocol":"groth16",
-            "nPublic":1,
-            "vk_alpha_1":["1","2","1"],
-            "vk_beta_2":[["1","0"],["1","0"],["1","0"]],
-            "vk_gamma_2":[["1","0"],["1","0"],["1","0"]],
-            "vk_delta_2":[["1","0"],["1","0"],["1","0"]],
-            "IC":[["1","2","1"],["1","2","1"]]
-        }"#,
+        &public,
+        serde_json::to_vec(proof_json["publicSignals"].as_array().unwrap()).unwrap(),
     )
     .unwrap();
-    fs::write(
-        &proof,
-        r#"{
-            "protocol":"groth16",
-            "pi_a":["1","2","1"],
-            "pi_b":[["1","0"],["1","0"],["1","0"]],
-            "pi_c":["1","2","1"]
-        }"#,
-    )
-    .unwrap();
-    fs::write(&public, r#"["3"]"#).unwrap();
 
     (vk, proof, public)
 }

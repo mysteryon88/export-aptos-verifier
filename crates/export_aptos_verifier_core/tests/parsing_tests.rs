@@ -114,5 +114,7 @@ fn oversized_public_input_array_is_rejected_before_scalar_conversion() {
 
     let err = parse_public_inputs(file.path()).unwrap_err();
 
-    assert!(matches!(err, Error::PublicInputCountMismatch(_)));
+    assert!(
+        matches!(err, Error::JsonParse { source, .. } if source.to_string().contains("collection"))
+    );
 }

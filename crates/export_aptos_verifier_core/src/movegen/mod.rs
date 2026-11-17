@@ -8,11 +8,11 @@ use crate::model::{CurveKind, Groth16VerifierInputs, SourceFormat};
 pub use context::{MovegenMode, MovegenTemplateInput};
 use handlebars::Handlebars;
 use sha2::{Digest, Sha256};
-use std::env;
-use std::fs::{self, create_dir_all, write};
-use std::io::Read;
-use std::path::{Component, Path};
-use tempfile::{Builder as TempDirBuilder, TempDir};
+use std::fs::File;
+use std::io::{self, Read};
+
+use crate::output::{Dir, Output};
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct GenerateMovePackageOptions<'a> {
@@ -102,14 +102,25 @@ pub fn generate_move_package_with_framework_rev(
     validate_move_names(options.package_name, options.module_name)?;
     validate_account_address(options.account_address)?;
     validate_aptos_framework_rev(aptos_framework_rev)?;
-    if options.force {
-        validate_safe_force_output_dir(out_dir)?;
-    }
-
-    if out_dir.exists() && !options.force {
-        return Err(Error::OutputExists(out_dir.to_path_buf()));
-    }
-
+    crate::output::validate_path(out_dir).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::Unsupported {
+            output_error(source)
+        } else {
+            Error::UnsafeOutputDirectory(out_dir.to_owned())
+        }
+    })?;
+    Output::check_existing(out_dir, options.force, |dir| {
+        validate_generated_output(dir, options)
+    })
+    .map_err(|source| {
+        if options.force && source.kind() != std::io::ErrorKind::Unsupported {
+            Error::UnsafeOutputDirectory(out_dir.to_owned())
+        } else if source.kind() == std::io::ErrorKind::AlreadyExists {
+            Error::OutputExists(out_dir.to_owned())
+        } else {
+            output_error(source)
+        }
+    })?;
     inputs.validate()?;
     let mut reg = Handlebars::new();
     register_templates(&mut reg)?;
@@ -215,139 +226,57 @@ pub fn generate_move_package_with_framework_rev(
         options.module_name,
         &input.account_address,
     );
-    let manifest = render_manifest(inputs, &input, &fingerprint)?;
+    let mut files = std::collections::BTreeMap::new();
+    for (name, content) in [
+        ("Move.toml", &move_toml),
+        ("sources/verifier.move", &verifier_source),
+        ("README.md", &generated_readme),
+    ] {
+        files.insert(name, hex::encode(Sha256::digest(content.as_bytes())));
+    }
+    if let Some(tests) = &move_tests {
+        files.insert(
+            "tests/verifier_tests.move",
+            hex::encode(Sha256::digest(tests.as_bytes())),
+        );
+    }
+    let manifest = render_manifest(inputs, &input, &fingerprint, &files)?;
 
-    let staging = create_staging_directory(out_dir)?;
-    let staged_out = staging.path().join("output");
-    create_dir_all(staged_out.join("sources")).map_err(|e| Error::Io {
-        source: e,
-        context: format!(
-            "create staged sources dir {}",
-            staged_out.join("sources").display()
-        ),
-    })?;
-    write_generated(staged_out.join("Move.toml"), move_toml, "Move.toml")?;
-    write_generated(
-        staged_out.join("sources").join("verifier.move"),
-        verifier_source,
-        "verifier.move",
-    )?;
-    if let Some(tests) = move_tests {
-        create_dir_all(staged_out.join("tests")).map_err(|e| Error::Io {
-            source: e,
-            context: format!(
-                "create staged tests dir {}",
-                staged_out.join("tests").display()
-            ),
+    let output = Output::new(out_dir).map_err(output_error)?;
+    output
+        .write("Move.toml", move_toml.as_bytes())
+        .map_err(output_error)?;
+    output
+        .write("sources/verifier.move", verifier_source.as_bytes())
+        .map_err(output_error)?;
+    if let Some(tests) = &move_tests {
+        output
+            .write("tests/verifier_tests.move", tests.as_bytes())
+            .map_err(output_error)?;
+    }
+    output
+        .write("README.md", generated_readme.as_bytes())
+        .map_err(output_error)?;
+    output
+        .write("verifier-manifest.json", format!("{manifest}\n").as_bytes())
+        .map_err(output_error)?;
+    output
+        .publish(options.force, |dir| validate_generated_output(dir, options))
+        .map_err(|source| {
+            if !options.force && source.kind() == std::io::ErrorKind::AlreadyExists {
+                Error::OutputExists(out_dir.to_owned())
+            } else {
+                output_error(source)
+            }
         })?;
-        write_generated(
-            staged_out.join("tests").join("verifier_tests.move"),
-            tests,
-            "verifier_tests.move",
-        )?;
-    }
-    write_generated(staged_out.join("README.md"), generated_readme, "README.md")?;
-    write_generated(
-        staged_out.join(MANIFEST_FILE_NAME),
-        format!("{manifest}\n"),
-        MANIFEST_FILE_NAME,
-    )?;
-    publish_staged_directory(staging, &staged_out, out_dir, options.force)?;
 
     Ok(())
 }
 
-fn create_staging_directory(out_dir: &Path) -> Result<TempDir> {
-    let parent = out_dir
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    create_dir_all(parent).map_err(|e| Error::Io {
-        source: e,
-        context: format!("create output parent {}", parent.display()),
-    })?;
-    TempDirBuilder::new()
-        .prefix(".export-aptos-verifier-")
-        .tempdir_in(parent)
-        .map_err(|e| Error::Io {
-            source: e,
-            context: format!("create staging directory in {}", parent.display()),
-        })
-}
-
-fn publish_staged_directory(
-    staging: TempDir,
-    staged_out: &Path,
-    out_dir: &Path,
-    force: bool,
-) -> Result<()> {
-    let backup = staging.path().join("previous-output");
-    let had_existing = if force {
-        match fs::rename(out_dir, &backup) {
-            Ok(()) => {
-                if validate_safe_force_output_dir(&backup).is_err() {
-                    return restore_previous_output_or_preserve(
-                        staging,
-                        &backup,
-                        out_dir,
-                        Error::UnsafeOutputDirectory(out_dir.to_path_buf()),
-                    );
-                }
-                true
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(source) => {
-                return Err(Error::Io {
-                    source,
-                    context: format!("stage existing output {}", out_dir.display()),
-                });
-            }
-        }
-    } else {
-        match fs::symlink_metadata(out_dir) {
-            Ok(_) => return Err(Error::OutputExists(out_dir.to_path_buf())),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(source) => {
-                return Err(Error::Io {
-                    source,
-                    context: format!("inspect output dir {}", out_dir.display()),
-                });
-            }
-        }
-    };
-
-    if let Err(publish_error) = fs::rename(staged_out, out_dir) {
-        let failure = Error::Io {
-            source: publish_error,
-            context: format!("publish generated output {}", out_dir.display()),
-        };
-        if had_existing {
-            return restore_previous_output_or_preserve(staging, &backup, out_dir, failure);
-        }
-        return Err(failure);
-    }
-    Ok(())
-}
-
-fn restore_previous_output_or_preserve(
-    staging: TempDir,
-    backup: &Path,
-    out_dir: &Path,
-    failure: Error,
-) -> Result<()> {
-    match fs::rename(backup, out_dir) {
-        Ok(()) => Err(failure),
-        Err(rollback_error) => {
-            let preserved = staging.keep().join("previous-output");
-            Err(Error::Io {
-                source: rollback_error,
-                context: format!(
-                    "restore {} after generation failed ({failure}); previous output preserved at {}",
-                    out_dir.display(),
-                    preserved.display()
-                ),
-            })
-        }
+fn output_error(source: std::io::Error) -> Error {
+    Error::Io {
+        source,
+        context: "publish output safely".into(),
     }
 }
 
@@ -367,13 +296,6 @@ fn ensure_adapter_matches_inputs(
         )));
     }
     Ok(())
-}
-
-fn write_generated(path: impl AsRef<Path>, contents: String, label: &str) -> Result<()> {
-    write(path, contents).map_err(|e| Error::Io {
-        source: e,
-        context: format!("write {label}"),
-    })
 }
 
 fn render_bytes(values: &[Vec<u8>]) -> Vec<String> {
@@ -446,9 +368,11 @@ fn render_manifest(
     inputs: &Groth16VerifierInputs,
     template: &MovegenTemplateInput,
     fingerprint: &[u8; 32],
+    files: &std::collections::BTreeMap<&str, String>,
 ) -> Result<String> {
     serde_json::to_string_pretty(&serde_json::json!({
         "schema": MANIFEST_SCHEMA,
+        "files": files,
         "generator": {
             "name": env!("CARGO_PKG_NAME"),
             "version": env!("CARGO_PKG_VERSION"),
@@ -539,96 +463,6 @@ fn validate_account_address(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_safe_force_output_dir(out_dir: &Path) -> Result<()> {
-    if out_dir
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
-    {
-        return Err(Error::UnsafeOutputDirectory(out_dir.to_path_buf()));
-    }
-
-    let metadata = match fs::symlink_metadata(out_dir) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => {
-            return Err(Error::Io {
-                source,
-                context: format!("inspect output dir {}", out_dir.display()),
-            });
-        }
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(Error::UnsafeOutputDirectory(out_dir.to_path_buf()));
-    }
-
-    let target = out_dir.canonicalize().map_err(|e| Error::Io {
-        source: e,
-        context: format!("canonicalize output dir {}", out_dir.display()),
-    })?;
-    if target.parent().is_none() {
-        return Err(Error::UnsafeOutputDirectory(target));
-    }
-
-    let cwd = env::current_dir().map_err(|e| Error::Io {
-        source: e,
-        context: "get current working directory".to_string(),
-    })?;
-    let cwd = cwd.canonicalize().map_err(|e| Error::Io {
-        source: e,
-        context: format!("canonicalize current working directory {}", cwd.display()),
-    })?;
-    if target == cwd || cwd.starts_with(&target) {
-        return Err(Error::UnsafeOutputDirectory(target));
-    }
-
-    let mut entries = fs::read_dir(out_dir).map_err(|source| Error::Io {
-        source,
-        context: format!("read output dir {}", out_dir.display()),
-    })?;
-    match entries.next() {
-        None => Ok(()),
-        Some(Err(source)) => Err(Error::Io {
-            source,
-            context: format!("read output dir {}", out_dir.display()),
-        }),
-        Some(Ok(_)) if generated_output_manifest_is_valid(out_dir) => Ok(()),
-        Some(Ok(_)) => Err(Error::UnsafeOutputDirectory(out_dir.to_path_buf())),
-    }
-}
-
-fn generated_output_manifest_is_valid(out_dir: &Path) -> bool {
-    let manifest = out_dir.join(MANIFEST_FILE_NAME);
-    let Ok(metadata) = fs::symlink_metadata(&manifest) else {
-        return false;
-    };
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.len() > MAX_MANIFEST_BYTES
-    {
-        return false;
-    }
-    let Ok(file) = fs::File::open(manifest) else {
-        return false;
-    };
-    let mut contents = String::new();
-    if file
-        .take(MAX_MANIFEST_BYTES + 1)
-        .read_to_string(&mut contents)
-        .is_err()
-        || contents.len() > MAX_MANIFEST_BYTES as usize
-    {
-        return false;
-    }
-    let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&contents) else {
-        return false;
-    };
-    manifest["schema"] == MANIFEST_SCHEMA
-        && manifest["generator"]["name"] == env!("CARGO_PKG_NAME")
-        && manifest["generator"]["version"]
-            .as_str()
-            .is_some_and(|version| !version.is_empty())
-}
-
 fn register_templates(handlebars: &mut Handlebars) -> Result<()> {
     let move_toml = include_str!("../../templates/Move.toml.hbs");
     let verifier_bn254 = include_str!("../../templates/verifier_bn254.move.hbs");
@@ -650,85 +484,266 @@ fn register_templates(handlebars: &mut Handlebars) -> Result<()> {
     Ok(())
 }
 
+// Public metadata protects against accidental deletion; it is not ownership authentication.
+fn validate_generated_output(
+    dir: &Dir,
+    options: &GenerateMovePackageOptions<'_>,
+) -> std::io::Result<()> {
+    use std::{ffi::OsStr, io};
+    let invalid = || {
+        io::Error::other("unsafe output: expected complete generated manifest, requested identity and unmodified file inventory; regenerate legacy output into a new directory and migrate explicitly")
+    };
+    let entries = dir.entries()?;
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let bytes = read_bounded(
+        dir.open_file(OsStr::new(MANIFEST_FILE_NAME))?,
+        MAX_MANIFEST_BYTES,
+    )?;
+    let manifest: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    let object = manifest.as_object().ok_or_else(invalid)?;
+    let required = [
+        "schema",
+        "generator",
+        "protocol",
+        "curve",
+        "public_inputs",
+        "vk_sha256",
+        "circuit_sha256",
+        "source_format",
+        "serialization_format",
+        "upgrade_policy",
+        "package",
+        "module",
+        "account_address",
+        "dependencies",
+        "files",
+    ];
+    if object.len() != required.len() || required.iter().any(|key| !object.contains_key(*key)) {
+        return Err(invalid());
+    }
+    let curve = match manifest["curve"].as_str() {
+        Some("bn254") => CurveKind::Bn254,
+        Some("bls12381") => CurveKind::Bls12_381,
+        _ => return Err(invalid()),
+    };
+    let hash_is_valid = |v: &serde_json::Value| {
+        v.as_str()
+            .is_some_and(|s| s.len() == 64 && s.bytes().all(|c| c.is_ascii_hexdigit()))
+    };
+    if manifest["schema"] != MANIFEST_SCHEMA
+        || manifest["generator"]
+            != serde_json::json!({"name": env!("CARGO_PKG_NAME"), "version": env!("CARGO_PKG_VERSION")})
+        || manifest["protocol"] != "groth16"
+        || manifest["package"] != options.package_name
+        || manifest["module"] != options.module_name
+        || manifest["account_address"] != options.account_address
+        || manifest["upgrade_policy"] != "immutable"
+        || !manifest["circuit_sha256"].is_null()
+        || !hash_is_valid(&manifest["vk_sha256"])
+        || !manifest["public_inputs"]
+            .as_u64()
+            .is_some_and(|n| n <= crate::model::MAX_PUBLIC_INPUTS as u64)
+        || manifest["serialization_format"] != serialization_format(curve)
+        || !matches!(
+            manifest["source_format"].as_str(),
+            Some(
+                "snarkjs-json"
+                    | "arkworks"
+                    | "arkworks-compact"
+                    | "gnark-json"
+                    | "gnark-binary"
+                    | "sp1-groth16"
+            )
+        )
+        || manifest["dependencies"]
+            .as_object()
+            .is_none_or(|m| m.len() != 2)
+        || manifest["dependencies"]["arkworks"] != "0.6"
+        || manifest["dependencies"]["framework_revision"]
+            .as_str()
+            .is_none_or(|rev| validate_aptos_framework_rev(rev).is_err())
+    {
+        return Err(invalid());
+    }
+    let files = manifest["files"].as_object().ok_or_else(invalid)?;
+    let has_tests = files.contains_key("tests/verifier_tests.move");
+    let mut expected_root = vec!["Move.toml", "README.md", MANIFEST_FILE_NAME, "sources"];
+    if has_tests {
+        expected_root.push("tests");
+    }
+    expected_root.sort();
+    let mut actual_root: Vec<_> = entries
+        .iter()
+        .map(|s| s.to_str().ok_or_else(invalid))
+        .collect::<io::Result<_>>()?;
+    actual_root.sort();
+    if actual_root != expected_root || files.len() != 3 + usize::from(has_tests) {
+        return Err(invalid());
+    }
+    let mut paths = vec!["Move.toml", "README.md", "sources/verifier.move"];
+    if has_tests {
+        paths.push("tests/verifier_tests.move");
+    }
+    for path in paths {
+        let (parent, filename) = match path.split_once('/') {
+            Some((directory, filename)) => {
+                let child = dir.open_dir(OsStr::new(directory))?;
+                if child.entries()? != [OsStr::new(filename)] {
+                    return Err(invalid());
+                }
+                (child, filename)
+            }
+            None => (dir.try_clone()?, path),
+        };
+        let content = read_bounded(parent.open_file(OsStr::new(filename))?, 32 * 1024 * 1024)?;
+        if files.get(path).is_none_or(|expected| {
+            !hash_is_valid(expected)
+                || expected.as_str() != Some(hex::encode(Sha256::digest(&content)).as_str())
+        }) {
+            return Err(invalid());
+        }
+    }
+    dir.validate_tree()?;
+    Ok(())
+}
+
+fn read_bounded(mut file: File, max: u64) -> io::Result<Vec<u8>> {
+    if !file.metadata()?.is_file() || file.metadata()?.len() > max {
+        return Err(io::Error::other("unsafe generated file size/type"));
+    }
+    let mut bytes = Vec::new();
+    (&mut file).take(max + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max {
+        return Err(io::Error::other("generated file grew beyond limit"));
+    }
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{
-        create_staging_directory, publish_staged_directory, Error, MANIFEST_FILE_NAME,
-        MANIFEST_SCHEMA,
-    };
+    use super::*;
     use std::fs;
 
     #[test]
-    fn failed_publish_restores_existing_output() {
-        let parent = tempfile::tempdir().unwrap();
-        let out = parent.path().join("generated");
-        fs::create_dir(&out).unwrap();
-        fs::write(out.join("keep.txt"), "existing output").unwrap();
-        fs::write(
-            out.join(MANIFEST_FILE_NAME),
-            format!(
-                r#"{{"schema":"{MANIFEST_SCHEMA}","generator":{{"name":"{}","version":"0.1.0"}}}}"#,
-                env!("CARGO_PKG_NAME")
-            ),
+    fn force_guard_rejects_markers_modifications_and_unexpected_files() {
+        let inputs = crate::formats::load_compact_bundle(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/ark-mimc/artifacts/bn254/groth16_artifacts.json"),
+            None,
         )
         .unwrap();
-        let staging = create_staging_directory(&out).unwrap();
-        let missing_staged_output = staging.path().join("missing");
-
-        assert!(publish_staged_directory(staging, &missing_staged_output, &out, true).is_err());
-        assert_eq!(
-            fs::read_to_string(out.join("keep.txt")).unwrap(),
-            "existing output"
-        );
+        let adapter = crate::curves::create_adapter("bn254").unwrap();
+        let options = GenerateMovePackageOptions {
+            package_name: "guard",
+            module_name: "verifier",
+            account_address: "0xCAFE",
+            mode: MovegenMode::Library,
+            force: true,
+        };
+        let parent = tempfile::tempdir().unwrap();
+        let marker = parent.path().join("marker");
+        fs::create_dir(&marker).unwrap();
+        fs::write(marker.join(MANIFEST_FILE_NAME), serde_json::to_vec(&serde_json::json!({
+            "schema": MANIFEST_SCHEMA,
+            "generator": { "name": env!("CARGO_PKG_NAME"), "version": env!("CARGO_PKG_VERSION") }
+        })).unwrap()).unwrap();
+        fs::write(marker.join("keep"), "user data").unwrap();
+        assert!(generate_move_package(&marker, adapter.as_ref(), &inputs, &options).is_err());
+        assert_eq!(fs::read(marker.join("keep")).unwrap(), b"user data");
+        for mutation in ["extra", "changed", "identity", "inventory", "legacy"] {
+            let out = parent.path().join(mutation);
+            generate_move_package(&out, adapter.as_ref(), &inputs, &options).unwrap();
+            match mutation {
+                "extra" => fs::write(out.join("user.txt"), "keep").unwrap(),
+                "changed" => {
+                    fs::write(out.join("sources/verifier.move"), "user modification").unwrap()
+                }
+                other => {
+                    let path = out.join(MANIFEST_FILE_NAME);
+                    let mut manifest: serde_json::Value =
+                        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                    if other == "identity" {
+                        manifest["package"] = serde_json::json!("other");
+                    } else if other == "inventory" {
+                        manifest["files"]["unexpected.txt"] = serde_json::json!("00".repeat(32));
+                    } else {
+                        manifest.as_object_mut().unwrap().remove("files");
+                    }
+                    fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+                }
+            }
+            let before = fs::read(out.join(MANIFEST_FILE_NAME)).unwrap();
+            assert!(
+                generate_move_package(&out, adapter.as_ref(), &inputs, &options).is_err(),
+                "{mutation}"
+            );
+            assert_eq!(fs::read(out.join(MANIFEST_FILE_NAME)).unwrap(), before);
+            if mutation == "extra" {
+                assert_eq!(fs::read(out.join("user.txt")).unwrap(), b"keep");
+            }
+            if mutation == "changed" {
+                assert_eq!(
+                    fs::read(out.join("sources/verifier.move")).unwrap(),
+                    b"user modification"
+                );
+            }
+        }
     }
 
     #[test]
-    fn non_force_publish_never_moves_existing_output() {
-        let parent = tempfile::tempdir().unwrap();
-        let out = parent.path().join("generated");
-        fs::create_dir(&out).unwrap();
-        fs::write(out.join("keep.txt"), "existing output").unwrap();
-        let staging = create_staging_directory(&out).unwrap();
-        let staged_out = staging.path().join("output");
-        fs::create_dir(&staged_out).unwrap();
-
-        assert!(matches!(
-            publish_staged_directory(staging, &staged_out, &out, false),
-            Err(Error::OutputExists(_))
-        ));
-        assert_eq!(
-            fs::read_to_string(out.join("keep.txt")).unwrap(),
-            "existing output"
-        );
-    }
-
-    #[test]
-    fn failed_rollback_preserves_backup_on_disk() {
-        let parent = tempfile::tempdir().unwrap();
-        let out = parent.path().join("generated");
-        fs::create_dir(&out).unwrap();
-        fs::write(out.join("occupied.txt"), "concurrent output").unwrap();
-        let staging = create_staging_directory(&out).unwrap();
-        let staging_path = staging.path().to_path_buf();
-        let backup = staging.path().join("previous-output");
-        fs::create_dir(&backup).unwrap();
-        fs::write(backup.join("keep.txt"), "existing output").unwrap();
-
-        let err = super::restore_previous_output_or_preserve(
-            staging,
-            &backup,
-            &out,
-            Error::Io {
-                source: std::io::Error::other("publish failed"),
-                context: "publish generated output".to_string(),
-            },
+    fn force_guard_rejects_nested_symlinks_without_external_mutation() {
+        let inputs = crate::formats::load_compact_bundle(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/ark-mimc/artifacts/bn254/groth16_artifacts.json"),
+            None,
         )
-        .unwrap_err();
-        assert!(err.to_string().contains("previous output preserved"));
-        assert_eq!(
-            fs::read_to_string(staging_path.join("previous-output/keep.txt")).unwrap(),
-            "existing output"
-        );
-        fs::remove_dir_all(staging_path).unwrap();
+        .unwrap();
+        let adapter = crate::curves::create_adapter("bn254").unwrap();
+        let options = GenerateMovePackageOptions {
+            package_name: "guard",
+            module_name: "verifier",
+            account_address: "0xCAFE",
+            mode: MovegenMode::Library,
+            force: true,
+        };
+        let p = tempfile::tempdir().unwrap();
+        let out = p.path().join("out");
+        generate_move_package(&out, adapter.as_ref(), &inputs, &options).unwrap();
+        let external = p.path().join("external");
+        fs::rename(out.join("sources"), &external).unwrap();
+        let before = fs::read(external.join("verifier.move")).unwrap();
+        crate::output::tests::link(&external, &out.join("sources"));
+        assert!(generate_move_package(&out, adapter.as_ref(), &inputs, &options).is_err());
+        assert_eq!(fs::read(external.join("verifier.move")).unwrap(), before);
+        assert!(fs::symlink_metadata(out.join("sources"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[test]
+    fn generated_force_guard_checks_requested_identity_on_both_curves() {
+        for curve in ["bn254", "bls12_381"] {
+            let bundle = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "../../examples/ark-mimc/artifacts/{curve}/groth16_artifacts.json"
+            ));
+            let inputs = crate::formats::load_compact_bundle(&bundle, None).unwrap();
+            let adapter = crate::curves::create_adapter(inputs.curve.canonical_name()).unwrap();
+            let mut options = GenerateMovePackageOptions {
+                package_name: "guard",
+                module_name: "verifier",
+                account_address: "0xCAFE",
+                mode: MovegenMode::Library,
+                force: true,
+            };
+            let parent = tempfile::tempdir().unwrap();
+            let out = parent.path().join("generated");
+            generate_move_package(&out, adapter.as_ref(), &inputs, &options).unwrap();
+            generate_move_package(&out, adapter.as_ref(), &inputs, &options).unwrap();
+            options.module_name = "different";
+            assert!(generate_move_package(&out, adapter.as_ref(), &inputs, &options).is_err());
+        }
     }
 }
